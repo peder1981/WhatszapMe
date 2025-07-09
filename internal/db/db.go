@@ -1,0 +1,259 @@
+package db
+
+import (
+	"database/sql"
+	"fmt"
+	"os"
+	"path/filepath"
+	"time"
+
+	_ "github.com/mattn/go-sqlite3"
+)
+
+// DB representa uma conexão com o banco de dados SQLite
+type DB struct {
+	conn *sql.DB
+}
+
+// Mensagem representa uma mensagem no histórico
+type Mensagem struct {
+	ID        int64
+	JID       string    // ID do contato no WhatsApp
+	Nome      string    // Nome do contato ou remetente
+	Conteudo  string    // Conteúdo da mensagem
+	Resposta  string    // Resposta gerada pelo LLM
+	Timestamp time.Time // Momento do recebimento/envio
+	Entrada   bool      // True = recebida do contato, False = enviada pelo sistema
+}
+
+// Opções para consulta de mensagens
+type OpcoesConsulta struct {
+	JID       string    // Filtrar por contato específico
+	DataInicio time.Time // Filtrar a partir desta data
+	DataFim    time.Time // Filtrar até esta data
+	Limite     int       // Limitar quantidade de resultados
+	Ordem      string    // "asc" (mais antigas primeiro) ou "desc" (mais recentes primeiro)
+}
+
+// New cria uma nova instância de DB
+func New(caminhoDB string) (*DB, error) {
+	// Garante que o diretório existe
+	dirPath := filepath.Dir(caminhoDB)
+	if err := os.MkdirAll(dirPath, 0755); err != nil {
+		return nil, fmt.Errorf("erro ao criar diretório para banco de dados: %w", err)
+	}
+
+	// Abre a conexão com o banco
+	conn, err := sql.Open("sqlite3", caminhoDB)
+	if err != nil {
+		return nil, fmt.Errorf("erro ao abrir banco de dados: %w", err)
+	}
+
+	// Testa a conexão
+	if err := conn.Ping(); err != nil {
+		conn.Close()
+		return nil, fmt.Errorf("erro ao conectar ao banco de dados: %w", err)
+	}
+
+	db := &DB{conn: conn}
+
+	// Inicializa as tabelas
+	if err := db.inicializarTabelas(); err != nil {
+		conn.Close()
+		return nil, fmt.Errorf("erro ao inicializar tabelas: %w", err)
+	}
+
+	return db, nil
+}
+
+// Fecha a conexão com o banco de dados
+func (db *DB) Close() error {
+	return db.conn.Close()
+}
+
+// Inicializa as tabelas do banco de dados
+func (db *DB) inicializarTabelas() error {
+	// Tabela para armazenar o histórico de mensagens
+	_, err := db.conn.Exec(`
+		CREATE TABLE IF NOT EXISTS mensagens (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			jid TEXT NOT NULL,
+			nome TEXT NOT NULL,
+			conteudo TEXT NOT NULL,
+			resposta TEXT,
+			timestamp DATETIME NOT NULL,
+			entrada BOOLEAN NOT NULL
+		);
+		
+		CREATE INDEX IF NOT EXISTS idx_mensagens_jid ON mensagens(jid);
+		CREATE INDEX IF NOT EXISTS idx_mensagens_timestamp ON mensagens(timestamp);
+	`)
+
+	if err != nil {
+		return fmt.Errorf("erro ao criar tabelas: %w", err)
+	}
+
+	return nil
+}
+
+// SalvarMensagem salva uma nova mensagem no histórico
+func (db *DB) SalvarMensagem(msg Mensagem) (int64, error) {
+	query := `
+		INSERT INTO mensagens (jid, nome, conteudo, resposta, timestamp, entrada)
+		VALUES (?, ?, ?, ?, ?, ?)
+	`
+
+	result, err := db.conn.Exec(
+		query,
+		msg.JID,
+		msg.Nome,
+		msg.Conteudo,
+		msg.Resposta,
+		msg.Timestamp,
+		msg.Entrada,
+	)
+
+	if err != nil {
+		return 0, fmt.Errorf("erro ao salvar mensagem: %w", err)
+	}
+
+	id, err := result.LastInsertId()
+	if err != nil {
+		return 0, fmt.Errorf("erro ao obter ID da mensagem inserida: %w", err)
+	}
+
+	return id, nil
+}
+
+// AtualizarResposta atualiza a resposta associada a uma mensagem
+func (db *DB) AtualizarResposta(id int64, resposta string) error {
+	_, err := db.conn.Exec("UPDATE mensagens SET resposta = ? WHERE id = ?", resposta, id)
+	if err != nil {
+		return fmt.Errorf("erro ao atualizar resposta da mensagem %d: %w", id, err)
+	}
+	return nil
+}
+
+// BuscarMensagens busca mensagens no histórico com base nas opções fornecidas
+func (db *DB) BuscarMensagens(opcoes OpcoesConsulta) ([]Mensagem, error) {
+	query := "SELECT id, jid, nome, conteudo, resposta, timestamp, entrada FROM mensagens WHERE 1=1"
+	args := []interface{}{}
+
+	// Adiciona filtros à consulta
+	if opcoes.JID != "" {
+		query += " AND jid = ?"
+		args = append(args, opcoes.JID)
+	}
+
+	// Filtro por data inicial
+	if !opcoes.DataInicio.IsZero() {
+		query += " AND timestamp >= ?"
+		args = append(args, opcoes.DataInicio)
+	}
+
+	// Filtro por data final
+	if !opcoes.DataFim.IsZero() {
+		query += " AND timestamp <= ?"
+		args = append(args, opcoes.DataFim)
+	}
+
+	// Ordenação
+	if opcoes.Ordem == "asc" {
+		query += " ORDER BY timestamp ASC"
+	} else {
+		query += " ORDER BY timestamp DESC" // padrão é mais recente primeiro
+	}
+
+	// Limite
+	if opcoes.Limite > 0 {
+		query += " LIMIT ?"
+		args = append(args, opcoes.Limite)
+	}
+
+	// Executa a consulta
+	rows, err := db.conn.Query(query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("erro ao buscar mensagens: %w", err)
+	}
+	defer rows.Close()
+
+	// Processa os resultados
+	var mensagens []Mensagem
+	for rows.Next() {
+		var msg Mensagem
+		var timestamp string // SQLite retorna timestamp como string
+
+		if err := rows.Scan(&msg.ID, &msg.JID, &msg.Nome, &msg.Conteudo, &msg.Resposta, &timestamp, &msg.Entrada); err != nil {
+			return nil, fmt.Errorf("erro ao ler mensagem: %w", err)
+		}
+
+		// Converte o timestamp para time.Time
+		// Tenta primeiro no formato RFC3339 (formato padrão do Go)
+		t, err := time.Parse(time.RFC3339, timestamp)
+		if err != nil {
+			// Se falhar, tenta no formato SQLite padrão
+			t, err = time.Parse("2006-01-02 15:04:05", timestamp)
+			if err != nil {
+				return nil, fmt.Errorf("erro ao processar timestamp: %w", err)
+			}
+		}
+		msg.Timestamp = t
+
+		mensagens = append(mensagens, msg)
+	}
+
+	return mensagens, nil
+}
+
+// BuscarContatos retorna uma lista de contatos distintos presentes no histórico
+func (db *DB) BuscarContatos() ([]struct{ JID, Nome string }, error) {
+	query := `
+		SELECT DISTINCT jid, nome 
+		FROM mensagens 
+		ORDER BY nome
+	`
+
+	rows, err := db.conn.Query(query)
+	if err != nil {
+		return nil, fmt.Errorf("erro ao buscar contatos: %w", err)
+	}
+	defer rows.Close()
+
+	var contatos []struct{ JID, Nome string }
+	for rows.Next() {
+		var contato struct{ JID, Nome string }
+		if err := rows.Scan(&contato.JID, &contato.Nome); err != nil {
+			return nil, fmt.Errorf("erro ao ler contato: %w", err)
+		}
+		contatos = append(contatos, contato)
+	}
+
+	return contatos, nil
+}
+
+// ObterUltimasMensagens retorna as últimas N mensagens de um contato específico
+func (db *DB) ObterUltimasMensagens(jid string, quantidade int) ([]Mensagem, error) {
+	return db.BuscarMensagens(OpcoesConsulta{
+		JID:    jid,
+		Limite: quantidade,
+		Ordem:  "desc",
+	})
+}
+
+// ExcluirHistoricoContato exclui todo o histórico de um contato específico
+func (db *DB) ExcluirHistoricoContato(jid string) error {
+	_, err := db.conn.Exec("DELETE FROM mensagens WHERE jid = ?", jid)
+	if err != nil {
+		return fmt.Errorf("erro ao excluir histórico do contato %s: %w", jid, err)
+	}
+	return nil
+}
+
+// LimparHistorico exclui todos os registros de mensagens
+func (db *DB) LimparHistorico() error {
+	_, err := db.conn.Exec("DELETE FROM mensagens")
+	if err != nil {
+		return fmt.Errorf("erro ao limpar histórico: %w", err)
+	}
+	return nil
+}
