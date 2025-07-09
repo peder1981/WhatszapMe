@@ -619,32 +619,33 @@ func createHistoryTab() fyne.CanvasObject {
 	)
 }
 
-// Função para atualizar a interface de histórico quando receber novas mensagens
+// Função para atualizar a interface de histórico com base em um JID
 func atualizarInterfaceHistorico(jid string) {
 	if gerenciadorHistorico == nil {
-		return // Ainda não inicializado
+		return
 	}
 	
-	// Como estamos executando em uma goroutine, programamos a atualização da UI para acontecer depois
-	// Usamos defer para garantir que a atualização ocorra após o retorno da função atual
-	defer func() {
-		// Executamos na goroutine principal mais tarde
-		go func() {
-			// Aguardamos um momento para garantir que as operações de banco de dados sejam concluídas
-			time.Sleep(100 * time.Millisecond)
-			
-			// Agora atualizamos a interface
-			if gerenciadorHistorico != nil {
-				gerenciadorHistorico.AtualizarContatos()
-				
-				// Se este contato estiver aberto, atualiza as mensagens também
-				contatoAtual := gerenciadorHistorico.GetContatoAtual()
-				if contatoAtual == jid {
-					gerenciadorHistorico.AtualizarMensagens(jid)
-				}
-			}
-		}()
-	}()
+	// Recarrega os contatos e atualiza a lista
+	fmt.Println("[DEBUG] Recarregando lista de contatos na interface...")
+	gerenciadorHistorico.AtualizarContatos()
+	
+	// Sempre recarrega o histórico do contato atual
+	jidAtual := gerenciadorHistorico.GetContatoAtual()
+	
+	// Se o JID corresponder ao contato atual ou não tiver contato selecionado, atualiza as mensagens
+	if jidAtual == jid || jidAtual == "" {
+		fmt.Printf("[DEBUG] Recarregando mensagens para JID: %s\n", jid)
+		gerenciadorHistorico.AtualizarMensagens(jid)
+		
+		// Se não tiver contato selecionado, atualiza o contato atual no gerenciador
+		if jidAtual == "" {
+			// Não vamos tentar definir diretamente, vamos apenas forçar uma atualização de contatos
+			// O próprio gerenciador vai selecionar o primeiro contato disponível
+			gerenciadorHistorico.AtualizarContatos()
+		}
+	} else {
+		fmt.Printf("[DEBUG] Mantendo histórico do contato atual: %s (diferente de %s)\n", jidAtual, jid)
+	}
 }
 
 // Cria a aba Sobre
@@ -1151,11 +1152,14 @@ func autoReconnectWhatsApp() {
 
 // Handler de mensagens recebidas
 func handleIncomingMessage(jid string, senderName string, message string) {
+	// Adicionado log detalhado para rastrear fluxo de mensagens
+	fmt.Printf("[DEBUG] Recebida mensagem de %s (%s): %s\n", senderName, jid, truncateString(message, 50))
+	
 	// Verifica se o contato está permitido para receber respostas
 	if !config.allowAllContacts {
 		if _, allowed := config.allowedContacts[jid]; !allowed {
 			// Se o contato não estiver na lista de permitidos, ignoramos a mensagem
-			fmt.Printf("Ignorando mensagem de %s (%s) - contato não autorizado\n", senderName, jid)
+			fmt.Printf("[AVISO] Ignorando mensagem de %s (%s) - contato não autorizado\n", senderName, jid)
 			return
 		}
 	}
@@ -1195,7 +1199,8 @@ func handleIncomingMessage(jid string, senderName string, message string) {
 		
 		msgID, err = database.SalvarMensagem(msg)
 		
-		// Atualiza a interface de histórico se estiver aberta
+		// Força atualização imediata da interface do histórico
+		fmt.Printf("[DEBUG] Atualizando interface para JID: %s após receber mensagem\n", jid)
 		atualizarInterfaceHistorico(jid)
 		
 		if err != nil {
@@ -1281,6 +1286,7 @@ func handleIncomingMessage(jid string, senderName string, message string) {
 		
 		// Envia a resposta de volta pelo WhatsApp
 		if client != nil && client.IsLoggedIn() {
+			fmt.Printf("[DEBUG] Enviando resposta para %s: %s\n", jid, truncateString(resposta, 50))
 			err := client.SendMessage(jid, resposta)
 			if err != nil {
 				fmt.Printf("[ERRO] Falha ao enviar mensagem: %v\n", err)
