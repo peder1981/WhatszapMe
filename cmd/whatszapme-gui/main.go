@@ -40,40 +40,50 @@ var (
 
 // Estrutura para armazenar as configurações do aplicativo
 type appConfig struct {
-	llmProvider    string
-	ollamaURL      string
-	ollamaModel    string
-	openAIKey      string
-	openAIModel    string
-	googleKey      string
-	googleModel    string
-	useGoogleOAuth bool
-	googleClientID     string // ID do cliente OAuth do Google
-	googleClientSecret string // Segredo do cliente OAuth do Google
-	dbPath         string
-	// Campos para personalização de prompts
-	userPromptTemplate    string // Template para o prompt do usuário
-	systemPromptTemplate  string // Template para o system prompt
-	// Gerenciamento de contatos
-	allowAllContacts      bool             // Se verdadeiro, responde a todos os contatos
-	allowedContacts       map[string]bool  // JIDs dos contatos permitidos (chave=JID, valor=permitido)
+	llmProvider          string
+	ollamaURL            string
+	ollamaModel          string
+	openAIKey            string
+	openAIModel          string
+	googleKey            string
+	googleModel          string
+	useGoogleOAuth       bool
+	googleClientID       string // ID do cliente OAuth do Google
+	googleClientSecret   string // Segredo do cliente OAuth do Google
+	systemPromptTemplate string
+	userPromptTemplate   string
+	allowAllContacts     bool
+	allowedContacts      map[string]bool
+	dbPath               string
+	authPath             string
+	// Configurações de grupos
+	respondToGroups        bool // Se deve responder a grupos
+	respondOnlyIfMentioned bool // Se deve responder apenas quando mencionado
+}
+
+// Implementação da interface SyncStore do pacote whatsapp
+// para sincronizar as configurações entre a GUI e o cliente WhatsApp
+func (cfg *appConfig) GetRespondToGroupsConfig(respondToGroups, respondOnlyIfMentioned *bool) {
+	*respondToGroups = cfg.respondToGroups
+	*respondOnlyIfMentioned = cfg.respondOnlyIfMentioned
 }
 
 // Configuração padrão
 var config = appConfig{
-	llmProvider:    "ollama",
-	ollamaURL:      "http://localhost:11434",
-	ollamaModel:    "llama2",
-	openAIModel:    "gpt-3.5-turbo",
-	googleModel:    "gemini-pro",
-	useGoogleOAuth: false,
-	dbPath:         filepath.Join(os.Getenv("HOME"), ".whatszapme", "whatszapme.db"),
-	// Templates de prompt padrão
-	userPromptTemplate:   "Mensagem de {{.SenderName}}: {{.Message}}\n\nResponda de forma concisa e útil.",
+	llmProvider:         "ollama",
+	ollamaURL:           "http://localhost:11434",
+	ollamaModel:         "llama2",
+	openAIModel:         "gpt-3.5-turbo",
+	googleModel:         "gemini-pro",
+	userPromptTemplate:  "Mensagem de {{.SenderName}}: {{.Message}}\n\nResponda de forma concisa e útil.",
 	systemPromptTemplate: "Você é um assistente virtual via WhatsApp. Seu objetivo é fornecer respostas úteis, precisas e concisas. Mantenha um tom educado e profissional. Não mencione que é uma IA a menos que seja perguntado diretamente.",
-	// Configurações de gerenciamento de contatos
 	allowAllContacts:     true,
 	allowedContacts:      make(map[string]bool),
+	dbPath:              filepath.Join(os.Getenv("HOME"), ".whatszapme", "whatszapme.db"),
+	authPath:            filepath.Join(os.Getenv("HOME"), ".whatszapme", "auth"),
+	// Valores padrão para configurações de grupos
+	respondToGroups:      true,  // Por padrão, responde a todas as mensagens de grupos
+	respondOnlyIfMentioned: false, // Por padrão, responde a todas as mensagens de grupos, mesmo sem menção
 }
 
 func main() {
@@ -293,6 +303,43 @@ func createSettingsTab() fyne.CanvasObject {
 		googleOAuthButton,
 	)
 	
+	// Opções de resposta a mensagens de grupos
+	groupsCard := widget.NewCard(
+		"Configurações de Grupos",
+		"Defina como o assistente responde a mensagens de grupos",
+		nil)
+	
+	respondToGroupsCheck := widget.NewCheck("Responder a mensagens de grupos", func(value bool) {
+		config.respondToGroups = value
+	})
+	respondToGroupsCheck.SetChecked(config.respondToGroups)
+	
+	respondOnlyIfMentionedCheck := widget.NewCheck("Responder apenas quando for mencionado em grupos", func(value bool) {
+		config.respondOnlyIfMentioned = value
+	})
+	respondOnlyIfMentionedCheck.SetChecked(config.respondOnlyIfMentioned)
+	
+	// Desabilita a opção "responder apenas quando mencionado" se não estiver respondendo a grupos
+	if !config.respondToGroups {
+		respondOnlyIfMentionedCheck.Disable()
+	}
+	
+	// Atualiza o estado do checkbox de responder apenas quando mencionado quando a opção de responder a grupos mudar
+	respondToGroupsCheck.OnChanged = func(value bool) {
+		config.respondToGroups = value
+		if value {
+			respondOnlyIfMentionedCheck.Enable()
+		} else {
+			respondOnlyIfMentionedCheck.Disable()
+		}
+	}
+	
+	groupsSettingsContainer := container.NewVBox(
+		groupsCard,
+		respondToGroupsCheck,
+		respondOnlyIfMentionedCheck,
+	)
+	
 	// Configurações de diretórios
 	dbPathEntry := widget.NewEntry()
 	dbPathEntry.SetText(config.dbPath)
@@ -424,6 +471,9 @@ func createSettingsTab() fyne.CanvasObject {
 		container.NewTabItem("Personalização", container.NewVBox(
 			promptSettings,
 		)),
+		container.NewTabItem("Grupos", container.NewVBox(
+			groupsSettingsContainer,
+		)),
 		container.NewTabItem("Contatos", container.NewVBox(
 			contactsSettings,
 		)),
@@ -440,6 +490,9 @@ func createSettingsTab() fyne.CanvasObject {
 	)
 }
 
+// Variável global para armazenar o gerenciador de histórico
+var gerenciadorHistorico *ui.GerenciadorHistorico
+
 // Cria a aba de histórico de conversas
 func createHistoryTab() fyne.CanvasObject {
 	// Utilizamos o componente de gerenciador de histórico já implementado
@@ -448,9 +501,53 @@ func createHistoryTab() fyne.CanvasObject {
 		return widget.NewLabel("Histórico indisponível. Banco de dados não inicializado.")
 	}
 	
-	// Cria o gerenciador de histórico e retorna seu container
-	gerenciador := ui.NewGerenciadorHistorico(database, mainWindow)
-	return gerenciador.Container()
+	// Cria o gerenciador de histórico
+	gerenciadorHistorico = ui.NewGerenciadorHistorico(database, mainWindow)
+	
+	// Configura o callback para envio de mensagens manuais
+	// Isso permite que o usuário envie mensagens diretamente pela interface
+	gerenciadorHistorico.ConfigurarEnvioCallback(func(destinatario, texto string) error {
+		// Verifica se o cliente WhatsApp está conectado e logado
+		if client == nil || !client.IsLoggedIn() {
+			return fmt.Errorf("cliente WhatsApp não está conectado ou logado")
+		}
+		
+		// Usa o cliente WhatsApp para enviar a mensagem
+		return client.SendMessage(destinatario, texto)
+	})
+	
+	// Quando receber uma nova mensagem, o cliente WhatsApp vai atualizar a interface
+	// isso é feito através do callback atualizarInterfaceHistorico
+	
+	return gerenciadorHistorico.Container()
+}
+
+// Função para atualizar a interface de histórico quando receber novas mensagens
+func atualizarInterfaceHistorico(jid string) {
+	if gerenciadorHistorico == nil {
+		return // Ainda não inicializado
+	}
+	
+	// Como estamos executando em uma goroutine, programamos a atualização da UI para acontecer depois
+	// Usamos defer para garantir que a atualização ocorra após o retorno da função atual
+	defer func() {
+		// Executamos na goroutine principal mais tarde
+		go func() {
+			// Aguardamos um momento para garantir que as operações de banco de dados sejam concluídas
+			time.Sleep(100 * time.Millisecond)
+			
+			// Agora atualizamos a interface
+			if gerenciadorHistorico != nil {
+				gerenciadorHistorico.AtualizarContatos()
+				
+				// Se este contato estiver aberto, atualiza as mensagens também
+				contatoAtual := gerenciadorHistorico.GetContatoAtual()
+				if contatoAtual == jid {
+					gerenciadorHistorico.AtualizarMensagens(jid)
+				}
+			}
+		}()
+	}()
 }
 
 // Cria a aba Sobre
@@ -510,49 +607,64 @@ func connectToWhatsApp(statusLabel *canvas.Text, qrCodeGenerator *ui.QRCodeGener
 	}
 	
 	// Atualiza status para "Conectado"
-	updateStatus(statusLabel, "Conectado. Aguardando login via QR Code...", color.NRGBA{R: 0, G: 200, B: 0, A: 255})
+	updateStatus(statusLabel, "Conectando ao WhatsApp. Aguardando QR Code...", color.NRGBA{R: 0, G: 200, B: 0, A: 255})
 	statusMu.Lock()
 	connected = true
 	statusMu.Unlock()
 	
 	// Registra um handler para exibir o QR Code quando disponível
 	client.SetQRCallback(func(qrCode string) {
-		// Usando goroutine para evitar bloqueio e depois executando na thread principal
+		// Log para verificar se o callback está sendo chamado
+		fmt.Printf("QR Code recebido: %d caracteres\n", len(qrCode))
+
+		// Primeiro gera o QR Code - isso pode ser feito em background
 		go func() {
-			// Usando Fyne MainThread para executar na thread principal
-			// A atualização dos componentes deve ser feita via go func().
-			// Nesse caso, já estamos em uma goroutine e podemos atualizar diretamente
-			// chamando os métodos dos componentes
-			err := qrCodeGenerator.UpdateQRCode(qrCode)
+			// Para garantir thread safety
+			qrCodeCopy := qrCode
+			
+			// Atualizamos a UI na thread principal
+			fmt.Println("Gerando QR Code...")
+			
+			// Usamos o primeiro método: criamos a imagem do QR Code
+			err := qrCodeGenerator.UpdateQRCode(qrCodeCopy)
 			if err != nil {
-				showErrorDialog(fmt.Sprintf("Erro ao gerar QR Code: %v", err))
+				fmt.Printf("Erro ao gerar QR Code: %v\n", err)
+				
+				// Se houver erro, exibimos na thread principal
+				fyne.CurrentApp().Driver().AllWindows()[0].Canvas().Content().Refresh()
+			} else {
+				fmt.Println("QR Code gerado com sucesso, atualizando interface...")
+				
+				// Força a atualização de todos os componentes
+				fyne.CurrentApp().Driver().AllWindows()[0].Content().Refresh()
 			}
 		}()
 	})
 	
-	// Registra callback para mudança de estado da conexão
+	// Registra handler para atualizações de estado da conexão para mostrar a barra de progresso
 	client.SetConnectionCallback(func(state string) {
-		// Usando goroutine para evitar bloqueio e depois executando na thread principal
 		go func() {
-			// A atualização dos componentes deve ser feita via go func().
-			// Nesse caso, já estamos em uma goroutine e podemos atualizar diretamente
-			// chamando os métodos dos componentes
 			switch state {
+			case "connecting":
+				qrCodeGenerator.StartProgress("Conectando ao servidor WhatsApp...")
+				updateStatus(statusLabel, "Conectando ao WhatsApp...", color.NRGBA{R: 200, G: 200, B: 0, A: 255})
+			case "syncing":
+				qrCodeGenerator.UpdateProgress(0.5, "Sincronizando mensagens e contatos...")
+				updateStatus(statusLabel, "Sincronizando com WhatsApp...", color.NRGBA{R: 200, G: 200, B: 0, A: 255})
 			case "connected":
-				updateStatus(statusLabel, "Conectado e autenticado", color.NRGBA{R: 0, G: 255, B: 0, A: 255})
+				qrCodeGenerator.StopProgress("Conectado! Pronto para receber mensagens.")
+				updateStatus(statusLabel, "Conectado e Ativo", color.NRGBA{R: 0, G: 200, B: 0, A: 255})
 				statusMu.Lock()
 				loggedIn = true
 				statusMu.Unlock()
-			case "qr":
-				updateStatus(statusLabel, "Escaneie o QR Code", color.NRGBA{R: 255, G: 200, B: 0, A: 255})
 			case "disconnected":
-				updateStatus(statusLabel, "Desconectado", color.NRGBA{R: 255, G: 165, B: 0, A: 255})
-				qrCodeGenerator.ClearQRCode("Desconectado do WhatsApp")
+				qrCodeGenerator.ClearQRCode("Desconectado. Conecte novamente para continuar.")
+				updateStatus(statusLabel, "Desconectado", color.NRGBA{R: 255, G: 0, B: 0, A: 255})
 				statusMu.Lock()
-				connected = false
 				loggedIn = false
 				statusMu.Unlock()
 			default:
+				qrCodeGenerator.UpdateProgress(0.0, fmt.Sprintf("Estado da conexão: %s", state))
 				updateStatus(statusLabel, fmt.Sprintf("Estado: %s", state), color.NRGBA{R: 100, G: 100, B: 100, A: 255})
 			}
 		}()
@@ -563,6 +675,24 @@ func connectToWhatsApp(statusLabel *canvas.Text, qrCodeGenerator *ui.QRCodeGener
 	
 	// Configurar handler de mensagens
 	client.SetMessageHandler(handleIncomingMessage)
+	
+	// Iniciar processo de login para exibir o QR Code
+	go func() {
+		// Aguardar um momento para que a interface carregue completamente
+		time.Sleep(500 * time.Millisecond)
+		
+		// Configura o SyncStore para permitir acesso às configurações
+		client.SetSyncStore(&config)
+		
+		// Chama o Login para iniciar o processo de autenticação
+		go func() {
+			err := client.Login()
+			if err != nil {
+				fmt.Printf("Erro ao fazer login: %v\n", err)
+				showErrorDialog(fmt.Sprintf("Erro ao iniciar login: %v", err))
+			}
+		}()
+	}()
 }
 
 // Função para desconectar do WhatsApp
@@ -715,17 +845,23 @@ func handleIncomingMessage(jid string, senderName string, message string) {
 	
 	// Salva a mensagem recebida no histórico, se o banco de dados estiver disponível
 	var msgID int64
+	var err error
+	
+	// Salva a mensagem no histórico
 	if database != nil {
 		msg := db.Mensagem{
-			JID:      jid,
-			Nome:     senderName,
-			Conteudo: message,
+			JID:       jid,
+			Nome:      senderName,
+			Conteudo:  message,
 			Timestamp: time.Now(),
-			Entrada:  true, // mensagem recebida
+			Entrada:   true, // mensagem recebida
 		}
 		
-		var err error
 		msgID, err = database.SalvarMensagem(msg)
+		
+		// Atualiza a interface de histórico se estiver aberta
+		atualizarInterfaceHistorico(jid)
+		
 		if err != nil {
 			fmt.Printf("Erro ao salvar mensagem no histórico: %v\n", err)
 			// Continua mesmo com erro

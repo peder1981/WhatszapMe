@@ -1,0 +1,63 @@
+# Binários compilados e diretórios de build
+/bin/
+/build/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Arquivos de teste e cobertura
+*.test
+*.out
+coverage.txt
+
+# Dependências e módulos
+/vendor/
+
+# Arquivos de ambiente e configuração
+.env
+*.env
+*.env.*
+!.env.example
+config.json
+config.*.json
+!config.example.json
+
+# Banco de dados SQLite (contém dados pessoais)
+*.db
+*.sqlite
+*.sqlite3
+
+# Logs e arquivos temporários
+*.log
+logs/
+*.tmp
+.tmp/
+tmp/
+
+# Configurações IDE/Editor
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+
+# Tokens e credenciais
+token.json
+credentials.json
+*_credentials.json
+*_token.json
+
+# Arquivos específicos da aplicação
+whatszapme.db
+*.session
+session.data
+
+# Arquivos de build específicos por plataforma
+*.app
+*.dmg
+*.pkg
+*.deb
+*.rpm
+*.msi

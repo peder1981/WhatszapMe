@@ -6,6 +6,7 @@ import (
 	"os"
 	"runtime"
 	"sync"
+	"strings"
 	"time"
 	
 	_ "github.com/mattn/go-sqlite3"
@@ -19,6 +20,12 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
+// SyncStore define a interface para sincronização de configurações
+type SyncStore interface {
+	// GetRespondToGroupsConfig retorna as configurações de resposta a grupos
+	GetRespondToGroupsConfig(respondToGroups, respondOnlyIfMentioned *bool)
+}
+
 // Client encapsula o cliente do WhatsApp
 type Client struct {
 	client        *whatsmeow.Client
@@ -30,6 +37,7 @@ type Client struct {
 	qrCallback    func(string)  // Callback para exibir o QR Code
 	connCallback  func(string)  // Callback para mudança de estado da conexão
 	msgHandler    func(string, string, string) // Handler para processar mensagens (jid, sender, message)
+	syncStore     SyncStore
 }
 
 // MessageHandler é uma função para processar mensagens
@@ -205,16 +213,61 @@ func (c *Client) SetupMessageHandler(handler MessageHandler) {
 			sender := v.Info.Sender
 			message := v.Message.GetConversation()
 			
-			// Se tiver o novo handler de mensagens UI, usa
+			// Verifica se o JID é de um grupo (grupos terminam com @g.us)
+			isGroup := strings.HasSuffix(chat.String(), "@g.us")
+			
+			// Se tiver o novo handler de mensagens UI, usa (apenas para exibição na interface)
 			if c.msgHandler != nil && message != "" {
 				c.msgHandler(chat.String(), sender.User, message)
 			}
 			
-			// Processa a mensagem com o handler fornecido
+			// Processa a mensagem com o handler fornecido apenas se deve responder
 			if message != "" {
-				response, err := handler(sender.String(), message)
-				if err == nil && response != "" {
-					c.SendMessage(chat.String(), response)
+				// Verificar configurações de grupos se for uma mensagem de grupo
+				shouldRespond := true
+				if isGroup {
+					// Obtém as configurações da App Config (variável global)
+					var respondToGroups bool
+					var respondOnlyIfMentioned bool
+					
+					// Usar o SyncStore para acessar as configurações de forma segura
+					if c.syncStore != nil {
+						c.syncStore.GetRespondToGroupsConfig(&respondToGroups, &respondOnlyIfMentioned)
+					}
+					
+					// Não responde se a opção de responder a grupos estiver desativada
+					if !respondToGroups {
+						shouldRespond = false
+					} else if respondOnlyIfMentioned {
+						// Verificar se foi mencionado na mensagem
+						// Obtém o JID do usuário atual para verificar se foi mencionado
+						currentUserJID := ""
+						if c.client != nil && c.client.Store != nil && c.client.Store.ID != nil {
+							currentUserJID = c.client.Store.ID.User
+						}
+						
+						// Busca pela menção no formato @[número]
+						mentioned := false
+						if currentUserJID != "" {
+							// Remove o formato @s.whatsapp.net do JID para buscar apenas o número
+							userNumber := strings.Split(currentUserJID, "@")[0]
+							mentioned = strings.Contains(message, "@"+userNumber) || 
+							           strings.Contains(message, "@+"+userNumber)
+						}
+						
+						// Não responde se não foi mencionado e a opção está ativa
+						if !mentioned {
+							shouldRespond = false
+						}
+					}
+				}
+				
+				// Processa a mensagem apenas se deve responder
+				if shouldRespond {
+					response, err := handler(sender.String(), message)
+					if err == nil && response != "" {
+						c.SendMessage(chat.String(), response)
+					}
 				}
 			}
 		}
@@ -260,6 +313,11 @@ func (c *Client) SetConnectionCallback(callback func(string)) {
 // SetMessageHandler define a função de handler para mensagens
 func (c *Client) SetMessageHandler(handler func(string, string, string)) {
 	c.msgHandler = handler
+}
+
+// SetSyncStore configura o store para sincronização de configurações
+func (c *Client) SetSyncStore(syncStore SyncStore) {
+	c.syncStore = syncStore
 }
 
 // Close fecha a conexão com o WhatsApp
