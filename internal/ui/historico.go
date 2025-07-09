@@ -126,6 +126,9 @@ func (gh *GerenciadorHistorico) inicializarUI() {
 	gh.contatosLista = widget.NewList(
 		// Quantidade de itens
 		func() int {
+			// Debug: imprime o número de contatos
+			fmt.Printf("Contatos disponíveis para exibição: %d\n", len(gh.contatos))
+			
 			// Se não houver contatos, mostra mensagem
 			if len(gh.contatos) == 0 {
 				// Adicionamos um texto informativo na interface
@@ -136,11 +139,16 @@ func (gh *GerenciadorHistorico) inicializarUI() {
 		},
 		// Template para cada item
 		func() fyne.CanvasObject {
-			return container.NewHBox(widget.NewLabel(""))
+			// Corrigindo o problema de sintaxe, usando variável intermediária
+			icon := widget.NewIcon(theme.AccountIcon())
+			label := widget.NewLabel("")
+			return container.NewHBox(icon, label)
 		},
 		// Atualização de cada item
 		func(id widget.ListItemID, objeto fyne.CanvasObject) {
-			label := objeto.(*fyne.Container).Objects[0].(*widget.Label)
+			label := objeto.(*fyne.Container).Objects[1].(*widget.Label)
+			icon := objeto.(*fyne.Container).Objects[0].(*widget.Icon)
+			
 			if len(gh.contatos) == 0 {
 				label.SetText("Nenhum contato encontrado. Envie e receba mensagens primeiro.")
 				return
@@ -148,6 +156,7 @@ func (gh *GerenciadorHistorico) inicializarUI() {
 			
 			// Garante que o índice seja válido
 			if id < 0 || id >= len(gh.contatos) {
+				fmt.Printf("Índice inválido: %d (total: %d)\n", id, len(gh.contatos))
 				return
 			}
 			
@@ -156,7 +165,12 @@ func (gh *GerenciadorHistorico) inicializarUI() {
 			if nome == "" {
 				nome = "Desconhecido"
 			}
+			
+			// Debug: imprime o nome do contato que está sendo exibido
+			fmt.Printf("Exibindo contato %d: %s\n", id, nome)
+			
 			label.SetText(nome)
+			icon.SetResource(theme.AccountIcon())
 		},
 	)
 
@@ -182,7 +196,46 @@ func (gh *GerenciadorHistorico) carregarContatos() {
 		return
 	}
 
+	// Imprime informações de debug sobre os contatos encontrados
+	fmt.Printf("Contatos encontrados: %d\n", len(contatos))
+	for i, c := range contatos {
+		fmt.Printf("Contato %d: JID=%s, Nome=%s\n", i, c.JID, c.Nome)
+	}
+
 	gh.contatos = contatos
+	
+	// Se não há contatos ainda, carregamos um contato de exemplo para testes
+	if len(gh.contatos) == 0 {
+		fmt.Println("Nenhum contato encontrado no histórico. Adicionando contato de teste...")
+		
+		// Salva uma mensagem de teste no banco de dados
+		mensagemTeste := db.Mensagem{
+			JID:       "123456789@s.whatsapp.net",
+			Nome:      "Contato Teste",
+			Conteudo:  "Olá! Esta é uma mensagem de teste.",
+			Resposta:  "Oi! Esta é uma resposta de teste.",
+			Timestamp: time.Now(),
+			Entrada:   true,
+		}
+		
+		// Salva a mensagem no banco de dados
+		_, err := gh.database.SalvarMensagem(mensagemTeste)
+		if err != nil {
+			fmt.Printf("Erro ao salvar mensagem de teste: %v\n", err)
+		}
+		
+		// Recarrega os contatos
+		contatos, err := gh.database.BuscarContatos()
+		if err != nil {
+			dialog.ShowError(err, gh.window)
+			return
+		}
+		
+		gh.contatos = contatos
+		fmt.Printf("Após adicionar contato de teste, encontramos: %d contatos\n", len(contatos))
+	}
+	
+	// Atualiza a interface
 	gh.contatosLista.Refresh()
 }
 
@@ -268,6 +321,12 @@ func (gh *GerenciadorHistorico) enviarMensagemManual() {
 
 // Carrega as mensagens de um contato específico
 func (gh *GerenciadorHistorico) carregarMensagens(jid string) {
+	// Log para debugar
+	fmt.Printf("Carregando mensagens para o contato: %s\n", jid)
+	
+	// Define o contato atual
+	gh.contatoAtual = jid
+	
 	// Busca as últimas 100 mensagens (ajuste conforme necessário)
 	mensagens, err := gh.database.BuscarMensagens(db.OpcoesConsulta{
 		JID:    jid,
@@ -276,9 +335,13 @@ func (gh *GerenciadorHistorico) carregarMensagens(jid string) {
 	})
 
 	if err != nil {
+		fmt.Printf("Erro ao buscar mensagens: %v\n", err)
 		dialog.ShowError(err, gh.window)
 		return
 	}
+
+	// Log para informar quantas mensagens foram encontradas
+	fmt.Printf("Mensagens encontradas para %s: %d\n", jid, len(mensagens))
 
 	// Guarda as mensagens e limpa o box
 	gh.mensagens = mensagens
@@ -286,12 +349,21 @@ func (gh *GerenciadorHistorico) carregarMensagens(jid string) {
 	
 	// Se não há mensagens, mostra uma informação
 	if len(mensagens) == 0 {
-		gh.mensagensBox.Add(widget.NewLabel("Nenhuma mensagem encontrada para este contato."))
+		fmt.Println("Nenhuma mensagem encontrada para este contato.")
+		
+		// Adiciona um texto informativo
+		infoLabel := widget.NewLabel("Nenhuma mensagem encontrada para este contato.")
+		infoLabel.Alignment = fyne.TextAlignCenter
+		gh.mensagensBox.Add(infoLabel)
 		return
 	}
 	
 	// Adiciona cada mensagem ao container
-	for _, msg := range mensagens {
+	for i, msg := range mensagens {
+		// Log para depuração
+		fmt.Printf("Exibindo mensagem %d: De=%s, Entrada=%v, Conteúdo=%s, Resposta=%s\n", 
+			i, msg.Nome, msg.Entrada, msg.Conteudo, msg.Resposta)
+		
 		// Configura o estilo da mensagem baseado no tipo
 		remetente := "Assistente"
 		tituloResposta := "Mensagem Original"
@@ -301,8 +373,15 @@ func (gh *GerenciadorHistorico) carregarMensagens(jid string) {
 			tituloResposta = "Resposta do Assistente"
 		}
 		
-		// Cria o card da mensagem
+		// Determina o ícone a ser usado
+		remetenteIcon := theme.ComputerIcon()
+		if msg.Entrada {
+			remetenteIcon = theme.AccountIcon()
+		}
+		
+		// Cria o card da mensagem com um visual mais atrativo
 		cabecalho := container.NewHBox(
+			widget.NewIcon(remetenteIcon),
 			widget.NewLabel(remetente),
 			layout.NewSpacer(),
 			widget.NewLabel(msg.Timestamp.Format("02/01/2006 15:04:05")),
@@ -321,19 +400,29 @@ func (gh *GerenciadorHistorico) carregarMensagens(jid string) {
 			respostaCard.Hide()
 		}
 		
-		// Adiciona todos os componentes ao box
-		gh.mensagensBox.Add(container.NewVBox(
+		// Container para a mensagem com estilo visual diferenciado
+		mensagemBox := container.NewVBox(
 			cabecalho,
-			conteudoLabel,
-			respostaCard,
-			widget.NewSeparator(),
-		))
+			container.NewPadded(conteudoLabel),
+		)
+		
+		// Adiciona a resposta se existir
+		if msg.Resposta != "" {
+			mensagemBox.Add(container.NewPadded(respostaCard))
+		}
+		
+		// Adiciona separador
+		mensagemBox.Add(widget.NewSeparator())
+		
+		// Adiciona ao container principal
+		gh.mensagensBox.Add(mensagemBox)
 	}
 	
 	// Role até a última mensagem após um breve delay para garantir que o scroll funcione
 	if len(mensagens) > 0 {
 		go func() {
 			time.Sleep(100 * time.Millisecond)
+			fmt.Println("Rolando para a última mensagem...")
 			gh.mensagensArea.ScrollToBottom()
 		}()
 	}

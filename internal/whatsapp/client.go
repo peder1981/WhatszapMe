@@ -20,10 +20,13 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-// SyncStore define a interface para sincronização de configurações
+// SyncStore define a interface para sincronização de configurações e contatos
 type SyncStore interface {
 	// GetRespondToGroupsConfig retorna as configurações de resposta a grupos
 	GetRespondToGroupsConfig(respondToGroups, respondOnlyIfMentioned *bool)
+	
+	// SincronizarContato adiciona ou atualiza um contato no banco de dados
+	SincronizarContato(jid, nome, telefone string) error
 }
 
 // Client encapsula o cliente do WhatsApp
@@ -333,4 +336,53 @@ func (c *Client) Close() {
 	if c.connCallback != nil {
 		c.connCallback("disconnected")
 	}
+}
+
+// SyncContacts sincroniza contatos do WhatsApp com o banco de dados local
+func (c *Client) SyncContacts() error {
+	if !c.IsLoggedIn() {
+		return fmt.Errorf("cliente não está logado, impossivel sincronizar contatos")
+	}
+	
+	if c.syncStore == nil {
+		return fmt.Errorf("syncStore não configurado")
+	}
+	
+	fmt.Println("Iniciando sincronização de contatos...")
+	
+	// Busca contatos do WhatsApp
+	ctx := context.Background()
+	contatos, err := c.client.Store.Contacts.GetAllContacts(ctx)
+	if err != nil {
+		return fmt.Errorf("erro ao obter contatos: %w", err)
+	}
+	
+	// Conta quantos contatos foram sincronizados
+	count := 0
+	
+	// Sincroniza cada contato com o banco de dados
+	for jid, contato := range contatos {
+		// Ignora contatos sem nome definido
+		nome := contato.FullName
+		if nome == "" {
+			nome = contato.FirstName
+		}
+		
+		// Se ainda não tem nome, usa o número do telefone
+		telefone := strings.Split(jid.User, "@")[0]
+		if nome == "" {
+			nome = telefone
+		}
+		
+		// Sincroniza com o banco de dados
+		err := c.syncStore.SincronizarContato(jid.String(), nome, telefone)
+		if err != nil {
+			fmt.Printf("Erro ao sincronizar contato %s: %v\n", jid.String(), err)
+		} else {
+			count++
+		}
+	}
+	
+	fmt.Printf("Sincronização de contatos concluída: %d contatos sincronizados\n", count)
+	return nil
 }

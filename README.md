@@ -6,6 +6,14 @@
 
 WhatszapMe é um atendente virtual para WhatsApp de uso pessoal que utiliza modelos de IA locais (preferencialmente via Ollama) para seu funcionamento. A aplicação é desenvolvida para ser executada localmente em um computador pessoal, sem dependência de serviços em nuvem.
 
+## Novidades (Julho 2025)
+
+- **Interface de Histórico Aprimorada**: Visualização otimizada de contatos e mensagens
+- **Intervenção Manual**: Agora é possível enviar mensagens diretamente pelo histórico
+- **Estabilidade**: Correção de bugs e melhorias de desempenho
+- **Detecção Automática**: Identificação e exibição automática de contatos
+- **Visual Melhorado**: Ícones diferenciados para cada tipo de mensagem
+
 ## Índice
 
 - [Funcionalidades](#funcionalidades)
@@ -33,9 +41,14 @@ WhatszapMe é um atendente virtual para WhatsApp de uso pessoal que utiliza mode
   - **Google Gemini**: Integração com modelos Gemini via OAuth ou API Key
 - **Personalização de Prompts**: Templates customizáveis para configurar o comportamento do assistente
 - **Gerenciamento de Contatos**: Selecione quais contatos o assistente responderá automaticamente
-- **Histórico de Conversas**: Armazenamento em SQLite e visualização de histórico completo de mensagens
+- **Histórico de Conversas Completo**: 
+  - Visualização organizada de contatos e mensagens
+  - Intervenção manual diretamente pelo histórico
+  - Distinção visual entre mensagens recebidas e enviadas
+  - Armazenamento eficiente em SQLite
 - **Autenticação via QR Code**: Simples escaneamento do QR Code exibido na interface
-- **Multiplataforma**: Disponível para Windows, macOS e Linux
+- **Atualização em Tempo Real**: Interface atualiza automaticamente ao receber novas mensagens
+- **Multiplataforma**: Disponível para Windows, macOS e Linux com instalação simplificada
 
 ## Requisitos
 
@@ -150,10 +163,16 @@ O WhatszapMe permite escolher quais contatos receberão respostas automáticas:
 
 Na aba "Histórico", você pode:
 
-1. Visualizar todas as conversas armazenadas no banco de dados
-2. Filtrar por contato específico
-3. Ver histórico completo de mensagens recebidas e respostas enviadas
-4. O histórico recente é usado como contexto para as novas respostas do LLM
+1. Visualizar todos os contatos armazenados no banco de dados
+2. Selecionar um contato para ver seu histórico completo de mensagens
+3. Ver histórico detalhado com mensagens recebidas e respostas enviadas
+4. **Intervenção Manual**: Enviar mensagens diretamente pelo histórico
+   - Digite sua mensagem no campo de texto na parte inferior
+   - Clique em "Enviar" ou pressione Enter para enviar a mensagem
+   - As mensagens enviadas manualmente são identificadas visualmente
+5. Todas as mensagens são armazenadas no banco de dados para referência futura
+6. O histórico recente é usado como contexto para as novas respostas do LLM
+7. Interface visual aprimorada com ícones diferentes para cada tipo de mensagem
 
 ## Desenvolvimento
 

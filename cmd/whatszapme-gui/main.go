@@ -3,6 +3,8 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"image/color"
 	"os"
@@ -28,14 +30,21 @@ import (
 	"github.com/peder/whatszapme/internal/whatsapp"
 )
 
+// Variáveis globais
 var (
-	mainWindow fyne.Window
-	client     *whatsapp.Client
-	llmClient  llm.Provider
-	database   *db.DB
-	statusMu   sync.Mutex
-	connected  bool = false
-	loggedIn   bool = false
+	mainWindow           fyne.Window
+	client               *whatsapp.Client
+	database             *db.DB
+	llmClient            llm.Provider
+	gerenciadorHistorico *ui.GerenciadorHistorico
+	statusLabel          *widget.Label // Label para exibir mensagens de status
+	statusMu             sync.Mutex    // Mutex para proteger acesso às variáveis de estado
+	connected            bool = false  // Estado de conexão do WhatsApp
+	loggedIn             bool = false  // Estado de login do WhatsApp
+	appName              = "WhatszapMe"
+	configFile           = "config.json"
+	saveDir              = ""
+	dataDir              = ""
 )
 
 // Estrutura para armazenar as configurações do aplicativo
@@ -68,6 +77,16 @@ func (cfg *appConfig) GetRespondToGroupsConfig(respondToGroups, respondOnlyIfMen
 	*respondOnlyIfMentioned = cfg.respondOnlyIfMentioned
 }
 
+// SincronizarContato implementa a interface whatsapp.SyncStore
+func (c *appConfig) SincronizarContato(jid, nome, telefone string) error {
+	// Usar a instância global do banco de dados para sincronizar contatos
+	if database == nil {
+		return fmt.Errorf("banco de dados não inicializado")
+	}
+	
+	return database.SincronizarContato(jid, nome, telefone)
+}
+
 // Configuração padrão
 var config = appConfig{
 	llmProvider:         "ollama",
@@ -91,12 +110,35 @@ func main() {
 	a := app.New()
 	a.SetIcon(theme.InfoIcon())
 	
+	// Determina o diretório de dados do aplicativo
+	homeDir, err := os.UserHomeDir()
+	if err == nil {
+		dataDir = filepath.Join(homeDir, ".config", appName)
+		// Garante que o diretório de dados existe
+		os.MkdirAll(dataDir, 0755)
+	} else {
+		fmt.Printf("Erro ao obter diretório home: %v\n", err)
+		// Fallback para o diretório atual
+		currDir, _ := os.Getwd()
+		dataDir = filepath.Join(currDir, ".config")
+	}
+	
+	// Carrega as configurações
+	err = loadConfig()
+	if err != nil {
+		fmt.Printf("Erro ao carregar configurações: %v\n", err)
+		// Continua com as configurações padrão
+	}
+	
 	// Cria a janela principal
 	mainWindow = a.NewWindow("WhatszapMe - Assistente Virtual WhatsApp")
 	mainWindow.Resize(fyne.NewSize(900, 600))
 	
 	// Inicializa o banco de dados
 	initDB()
+	
+	// Tenta reconectar automaticamente ao WhatsApp
+	autoReconnectWhatsApp()
 	
 	// Abas principais da aplicação
 	tabs := container.NewAppTabs(
@@ -369,8 +411,20 @@ func createSettingsTab() fyne.CanvasObject {
 	
 	// Botão para salvar configurações
 	saveButton := widget.NewButton("Salvar Configurações", func() {
-		// Implementar salvamento das configurações
-		dialog.ShowInformation("Configurações", "Configurações salvas com sucesso!", mainWindow)
+		// Salva as configurações em arquivo JSON
+		err := saveConfig()
+		if err != nil {
+			showErrorDialog("Erro ao salvar configurações: " + err.Error())
+			return
+		}
+		
+		// Notifica o usuário que as configurações foram salvas
+		showInfoDialog("Configurações salvas", "As configurações foram salvas com sucesso.")
+		
+		// Atualiza o cliente WhatsApp com as novas configurações se estiver conectado
+		if client != nil {
+			client.SetSyncStore(&config)
+		}
 	})
 	
 	// Configurações de Prompts
@@ -491,7 +545,7 @@ func createSettingsTab() fyne.CanvasObject {
 }
 
 // Variável global para armazenar o gerenciador de histórico
-var gerenciadorHistorico *ui.GerenciadorHistorico
+// gerenciadorHistorico já foi declarado globalmente
 
 // Cria a aba de histórico de conversas
 func createHistoryTab() fyne.CanvasObject {
@@ -505,7 +559,6 @@ func createHistoryTab() fyne.CanvasObject {
 	gerenciadorHistorico = ui.NewGerenciadorHistorico(database, mainWindow)
 	
 	// Configura o callback para envio de mensagens manuais
-	// Isso permite que o usuário envie mensagens diretamente pela interface
 	gerenciadorHistorico.ConfigurarEnvioCallback(func(destinatario, texto string) error {
 		// Verifica se o cliente WhatsApp está conectado e logado
 		if client == nil || !client.IsLoggedIn() {
@@ -516,10 +569,54 @@ func createHistoryTab() fyne.CanvasObject {
 		return client.SendMessage(destinatario, texto)
 	})
 	
-	// Quando receber uma nova mensagem, o cliente WhatsApp vai atualizar a interface
-	// isso é feito através do callback atualizarInterfaceHistorico
+	// Função de sincronização de contatos que será usada pelo botão
+	sincronizarContatos := func() {
+		if client == nil || !client.IsLoggedIn() {
+			dialog.ShowError(fmt.Errorf("cliente WhatsApp não está conectado ou logado"), mainWindow)
+			return
+		}
+		
+		// Executa a sincronização em uma goroutine
+		go func() {
+			fmt.Println("Iniciando sincronização manual de contatos...")
+			
+			// Mostra diálogo de progresso
+			progressDialog := dialog.NewProgress("Sincronizando Contatos", "Aguarde enquanto sincronizamos seus contatos...", mainWindow)
+			progressDialog.Show()
+			progressDialog.SetValue(0.5) // Mostra 50% de progresso
+			
+			err := client.SyncContacts()
+			
+			// Fecha o diálogo ao finalizar
+			progressDialog.Hide()
+			
+			if err != nil {
+				fmt.Printf("Erro ao sincronizar contatos: %v\n", err)
+				dialog.ShowError(fmt.Errorf("erro ao sincronizar contatos: %v", err), mainWindow)
+			} else {
+				// Atualiza a interface após a sincronização
+				atualizarInterfaceHistorico("")
+				
+				// Mostra notificação de sucesso
+				dialog.ShowInformation("Sincronização Concluída", "Contatos sincronizados com sucesso!", mainWindow)
+			}
+		}()
+	}
 	
-	return gerenciadorHistorico.Container()
+	// Cria uma barra de ferramentas com botão de sincronização
+	toolbar := widget.NewToolbar(
+		widget.NewToolbarSpacer(),
+		widget.NewToolbarAction(theme.ViewRefreshIcon(), sincronizarContatos),
+	)
+	
+	// Container para a barra de ferramentas e o gerenciador de histórico
+	return container.NewBorder(
+		toolbar, // Coloca a barra de ferramentas no topo
+		nil,
+		nil,
+		nil,
+		gerenciadorHistorico.Container(), // Conteúdo principal
+	)
 }
 
 // Função para atualizar a interface de histórico quando receber novas mensagens
@@ -657,6 +754,19 @@ func connectToWhatsApp(statusLabel *canvas.Text, qrCodeGenerator *ui.QRCodeGener
 				statusMu.Lock()
 				loggedIn = true
 				statusMu.Unlock()
+				
+				// Sincroniza contatos quando conectado
+				go func() {
+					fmt.Println("Cliente WhatsApp conectado, sincronizando contatos...")
+					err := client.SyncContacts()
+					if err != nil {
+						fmt.Printf("Erro ao sincronizar contatos: %v\n", err)
+					} else {
+						// Atualiza a interface após a sincronização
+						// Passamos string vazia para atualizar todos os contatos
+						atualizarInterfaceHistorico("")
+					}
+				}()
 			case "disconnected":
 				qrCodeGenerator.ClearQRCode("Desconectado. Conecte novamente para continuar.")
 				updateStatus(statusLabel, "Desconectado", color.NRGBA{R: 255, G: 0, B: 0, A: 255})
@@ -724,19 +834,135 @@ func updateStatus(label *canvas.Text, text string, textColor color.Color) {
 	label.Refresh()
 }
 
-// Mostra mensagem de erro
+// Mostra um diálogo de erro
 func showErrorDialog(message string) {
-	fyne.CurrentApp().SendNotification(&fyne.Notification{
-		Title:   "Erro",
-		Content: message,
-	})
+	dialog.ShowError(errors.New(message), mainWindow)
+}
+
+// Mostra um diálogo de informação com título e conteúdo
+func showInfoDialog(title, content string) {
+	dialog.ShowInformation(title, content, mainWindow)
+}
+
+// Trunca uma string se ela exceder o tamanho máximo
+func truncateString(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	return s[:maxLen] + "..."
+}
+
+	// Atualiza a barra de status com uma mensagem
+func updateStatusBar(message string) {
+	// Esta função é executada em uma goroutine, então precisamos
+	// garantir que seja executada na thread principal da interface
+	if mainWindow == nil {
+		return
+	}
 	
-	dialog.ShowError(fmt.Errorf(message), mainWindow)
+	// Se tivermos um statusLabel, atualizamos seu texto
+	// usando o método Refresh para garantir que as alterações
+	// sejam aplicadas na thread principal da interface
+	if statusLabel != nil {
+		// Atualizamos o texto do status
+		statusLabel.SetText(message)
+		statusLabel.Refresh()
+		
+		// Limpa a mensagem após 5 segundos
+		go func() {
+			time.Sleep(5 * time.Second)
+			// Verificamos se o statusLabel ainda existe
+			if statusLabel != nil {
+				// Verificação dupla para segurança
+				statusLabel.SetText("")
+				statusLabel.Refresh()
+			}
+		}()
+	}
 }
 
 // Mostra um diálogo de funcionalidade não implementada
 func showNotImplementedDialog() {
 	dialog.ShowInformation("Em desenvolvimento", "Esta funcionalidade será implementada em breve.", mainWindow)
+}
+
+// Salva as configurações do aplicativo em um arquivo JSON
+func saveConfig() error {
+	// Garante que o diretório de configurações existe
+	if saveDir == "" {
+		saveDir = filepath.Join(dataDir, "config")
+	}
+	
+	// Cria o diretório se não existir
+	err := os.MkdirAll(saveDir, 0755)
+	if err != nil {
+		return fmt.Errorf("erro ao criar diretório de configuração: %w", err)
+	}
+	
+	// Caminho completo do arquivo de configuração
+	confPath := filepath.Join(saveDir, configFile)
+	
+	// Converte a estrutura para JSON
+	data, err := json.MarshalIndent(config, "", "  ")
+	if err != nil {
+		return fmt.Errorf("erro ao serializar configurações: %w", err)
+	}
+	
+	// Escreve no arquivo
+	err = os.WriteFile(confPath, data, 0644)
+	if err != nil {
+		return fmt.Errorf("erro ao escrever arquivo de configuração: %w", err)
+	}
+	
+	updateStatusBar("Configurações salvas em " + confPath)
+	fmt.Printf("Configurações salvas em: %s\n", confPath)
+	
+	return nil
+}
+
+// Carrega as configurações do aplicativo de um arquivo JSON
+func loadConfig() error {
+	// Define o diretório de dados e configurações se não estiver definido
+	if dataDir == "" {
+		// Determina o diretório padrão de dados do aplicativo
+		homeDir, err := os.UserHomeDir()
+		if err != nil {
+			return fmt.Errorf("erro ao obter diretório home do usuário: %w", err)
+		}
+		
+		// Define o diretório de dados dentro da pasta .config no diretório home
+		dataDir = filepath.Join(homeDir, ".config", appName)
+	}
+	
+	// Define o diretório de configurações
+	saveDir = filepath.Join(dataDir, "config")
+	
+	// Caminho completo do arquivo de configuração
+	confPath := filepath.Join(saveDir, configFile)
+	
+	// Verifica se o arquivo existe
+	_, err := os.Stat(confPath)
+	if os.IsNotExist(err) {
+		fmt.Printf("Arquivo de configuração não encontrado, usando valores padrão: %s\n", confPath)
+		return nil // Usa configurações padrão
+	}
+	
+	// Lê o arquivo de configuração
+	data, err := os.ReadFile(confPath)
+	if err != nil {
+		return fmt.Errorf("erro ao ler arquivo de configuração: %w", err)
+	}
+	
+	// Faz o parsing do JSON para a estrutura
+	err = json.Unmarshal(data, &config)
+	if err != nil {
+		return fmt.Errorf("erro ao deserializar configurações: %w", err)
+	}
+	
+	updateStatusBar("Configurações carregadas de " + confPath)
+	fmt.Printf("Configurações carregadas de: %s\n", confPath)
+	
+	return nil
 }
 
 // Inicializa o cliente LLM de acordo com as configurações
@@ -822,6 +1048,107 @@ func initDB() {
 	}
 }
 
+// Botões de conexão do WhatsApp
+var (
+	connectButton    *widget.Button
+	disconnectButton *widget.Button
+)
+
+// Tenta reconectar automaticamente ao WhatsApp quando o aplicativo inicia
+func autoReconnectWhatsApp() {
+	fmt.Println("Iniciando reconexão automática do WhatsApp...")
+	// Verifica se o caminho do banco de dados está definido
+	if config.dbPath == "" {
+		fmt.Println("Caminho do banco de dados não definido, não é possível reconectar automaticamente.")
+		return
+	}
+	
+	// Certifica-se de que o diretório do banco de dados existe
+	dbDir := filepath.Dir(config.dbPath)
+	if _, err := os.Stat(dbDir); os.IsNotExist(err) {
+		os.MkdirAll(dbDir, 0755)
+	}
+	
+	// Cria o cliente WhatsApp
+	var err error
+	client, err = whatsapp.NewClient(config.dbPath)
+	if err != nil {
+		fmt.Printf("Erro ao criar cliente WhatsApp para reconexão automática: %v\n", err)
+		return
+	}
+	
+	// Registra handler para o QR Code (não mostraremos o QR na reconexão automática)
+	client.SetQRCallback(func(qrCode string) {
+		// Apenas registra que seria necessário um QR Code
+		fmt.Println("QR Code necessário para login. Use a aba Conexão para escanear.")
+	})
+	
+	// Registra handler para atualizações de estado da conexão
+	client.SetConnectionCallback(func(state string) {
+		go func() {
+			switch state {
+			case "connecting":
+				fmt.Println("Reconexão automática: Conectando ao servidor WhatsApp...")
+			case "syncing":
+				fmt.Println("Reconexão automática: Sincronizando mensagens e contatos...")
+			case "connected":
+				fmt.Println("Reconexão automática: WhatsApp conectado com sucesso!")
+				updateStatusBar("WhatsApp reconectado automaticamente")
+				
+				statusMu.Lock()
+				connected = true
+				loggedIn = true
+				statusMu.Unlock()
+				
+				// Sincroniza contatos quando conectado
+				go func() {
+					fmt.Println("Cliente WhatsApp reconectado, sincronizando contatos...")
+					err := client.SyncContacts()
+					if err != nil {
+						fmt.Printf("Erro ao sincronizar contatos: %v\n", err)
+					} else {
+						// Atualiza a interface após a sincronização
+						atualizarInterfaceHistorico("")
+					}
+				}()
+			case "disconnected":
+				fmt.Println("Reconexão automática: WhatsApp desconectado")
+				updateStatusBar("WhatsApp desconectado")
+				
+				statusMu.Lock()
+				connected = false
+				loggedIn = false
+				statusMu.Unlock()
+			default:
+				fmt.Printf("Reconexão automática: Estado da conexão: %s\n", state)
+			}
+		}()
+	})
+	
+	// Configurar handler de mensagens
+	client.SetMessageHandler(handleIncomingMessage)
+	
+	// Configura o SyncStore para permitir acesso às configurações
+	client.SetSyncStore(&config)
+	
+	// Inicializa o cliente LLM conforme configurações
+	initLLMClient()
+	
+	// Tenta reconectar usando sessão existente
+	go func() {
+		// Aguarda um momento para a interface inicializar completamente
+		time.Sleep(1 * time.Second)
+		
+		// Tenta fazer login com dados de sessão existentes
+		fmt.Println("Tentando reconectar com a sessão existente do WhatsApp...")
+		err := client.Login()
+		if err != nil {
+			fmt.Printf("Tentativa de reconexão automática falhou: %v\n", err)
+			fmt.Println("Use o botão 'Iniciar Conexão' na aba Conexão para conectar manualmente.")
+		}
+	}()
+}
+
 // Handler de mensagens recebidas
 func handleIncomingMessage(jid string, senderName string, message string) {
 	// Verifica se o contato está permitido para receber respostas
@@ -833,12 +1160,20 @@ func handleIncomingMessage(jid string, senderName string, message string) {
 		}
 	}
 	
+	// Verifica se o LLM está disponível
 	if llmClient == nil {
-		fmt.Println("Erro: Cliente LLM não inicializado")
+		fmt.Println("[ERRO] Cliente LLM não inicializado, tentando reinicializar...")
 		// Tenta inicializar o cliente LLM novamente
 		initLLMClient()
 		// Se ainda estiver nulo, não podemos continuar
 		if llmClient == nil {
+			fmt.Println("[ERRO CRÍTICO] Falha ao inicializar o cliente LLM, mensagem será ignorada")
+			// Notifica o usuário via interface se possível
+			go func() {
+				if mainWindow != nil {
+					showErrorDialog("Erro crítico: Cliente LLM não pôde ser inicializado. Verifique as configurações.")
+				}
+			}()
 			return
 		}
 	}
@@ -855,6 +1190,7 @@ func handleIncomingMessage(jid string, senderName string, message string) {
 			Conteudo:  message,
 			Timestamp: time.Now(),
 			Entrada:   true, // mensagem recebida
+			// Status:    "recebida", // Status inicial (se implementarmos este campo)
 		}
 		
 		msgID, err = database.SalvarMensagem(msg)
@@ -863,14 +1199,22 @@ func handleIncomingMessage(jid string, senderName string, message string) {
 		atualizarInterfaceHistorico(jid)
 		
 		if err != nil {
-			fmt.Printf("Erro ao salvar mensagem no histórico: %v\n", err)
+			fmt.Printf("[ERRO] Falha ao salvar mensagem no histórico: %v\n", err)
 			// Continua mesmo com erro
+		} else {
+			fmt.Printf("[INFO] Mensagem de %s salva no histórico com ID: %d\n", senderName, msgID)
 		}
+	} else {
+		fmt.Println("[ALERTA] Banco de dados não disponível, mensagem não será salva no histórico")
 	}
 	
-	// Processa a mensagem com o LLM escolhido
+	// Processa a mensagem com o LLM escolhido em uma goroutine separada
 	go func() {
-		fmt.Printf("Processando mensagem de %s (%s): %s\n", senderName, jid, message)
+		// Informação para log e depuração
+		fmt.Printf("[INFO] Processando mensagem de %s (%s): %s\n", senderName, jid, message)
+		
+		// Atualiza o status visual se possível (indicador de processamento)
+		updateStatusBar(fmt.Sprintf("Processando mensagem de %s...", senderName))
 		
 		// Prepara os dados para o template
 		msgData := MessageData{
@@ -882,47 +1226,74 @@ func handleIncomingMessage(jid string, senderName string, message string) {
 		// Processa os templates de prompt
 		userPrompt, err := processTemplate(config.userPromptTemplate, msgData)
 		if err != nil {
-			fmt.Printf("Erro ao processar template de prompt: %v. Usando fallback.\n", err)
+			fmt.Printf("[ALERTA] Erro ao processar template de prompt: %v. Usando fallback.\n", err)
 			userPrompt = fmt.Sprintf("Mensagem de %s: %s\n\nResponda de forma concisa e útil.", senderName, message)
 		}
 		
 		systemPrompt, err := processTemplate(config.systemPromptTemplate, msgData)
 		if err != nil {
-			fmt.Printf("Erro ao processar template de system prompt: %v. Usando fallback.\n", err)
-			systemPrompt = "Você é um assistente virtual via WhatsApp."
+			fmt.Printf("[ALERTA] Erro ao processar template de system prompt: %v. Usando fallback.\n", err)
+			systemPrompt = "Você é um assistente virtual via WhatsApp. Seja conciso e útil."
 		}
+		
+		// Informa que a requisição para o LLM foi iniciada
+		fmt.Println("[INFO] Enviando requisição para o LLM...")
+		llmStartTime := time.Now()
 		
 		// Envia para o LLM processar
 		resposta, err := llmClient.GenerateCompletion(userPrompt, systemPrompt)
 		
+		// Calcula o tempo de resposta
+		llmDuration := time.Since(llmStartTime)
+		
 		if err != nil {
-			fmt.Printf("Erro ao gerar resposta: %v\n", err)
+			// Tratamento de erro melhorado
+			fmt.Printf("[ERRO] Falha ao gerar resposta via LLM após %.2f segundos: %v\n", 
+				llmDuration.Seconds(), err)
 			
-			// Envia mensagem de erro para o usuário
+			// Atualiza interface se houver erro
+			updateStatusBar(fmt.Sprintf("Erro ao processar mensagem de %s", senderName))
+			
+			// Envia mensagem de erro para o usuário do WhatsApp
 			errorMsg := "Desculpe, tive um problema ao processar sua mensagem. Por favor, tente novamente mais tarde."
 			if client != nil && client.IsLoggedIn() {
-				client.SendMessage(jid, errorMsg)
+				err := client.SendMessage(jid, errorMsg)
+				if err != nil {
+					fmt.Printf("[ERRO] Falha ao enviar mensagem de erro: %v\n", err)
+				}
 			}
+			
+			// Notifica na interface gráfica
+			go func() {
+				if mainWindow != nil {
+					showErrorDialog(fmt.Sprintf("Erro ao gerar resposta via %s: %v", config.llmProvider, err))
+				}
+			}()
 			return
 		}
 		
-		// Log da resposta gerada
-		fmt.Printf("Resposta gerada: %s\n", resposta)
+		// Log da resposta gerada com métricas
+		fmt.Printf("[INFO] Resposta gerada em %.2f segundos pelo modelo %s:\n%s\n", 
+			llmDuration.Seconds(), config.llmProvider, truncateString(resposta, 100))
+		
+		// Atualiza status na interface
+		updateStatusBar(fmt.Sprintf("Enviando resposta para %s...", senderName))
 		
 		// Envia a resposta de volta pelo WhatsApp
 		if client != nil && client.IsLoggedIn() {
 			err := client.SendMessage(jid, resposta)
 			if err != nil {
-				fmt.Printf("Erro ao enviar mensagem: %v\n", err)
+				fmt.Printf("[ERRO] Falha ao enviar mensagem: %v\n", err)
 				
 				// Notifica o usuário via interface
-				// Usando goroutine para evitar bloqueio e depois executando na thread principal
 				go func() {
-					// A atualização dos componentes deve ser feita via go func().
-			// Nesse caso, já estamos em uma goroutine e podemos atualizar diretamente
-			// chamando os métodos dos componentes
-					showErrorDialog(fmt.Sprintf("Erro ao enviar resposta: %v", err))
+					if mainWindow != nil {
+						showErrorDialog(fmt.Sprintf("Erro ao enviar resposta: %v", err))
+					}
 				}()
+			} else {
+				fmt.Printf("[INFO] Resposta enviada com sucesso para %s\n", senderName)
+				updateStatusBar(fmt.Sprintf("Resposta enviada para %s", senderName))
 			}
 			
 			// Salva a resposta no histórico
@@ -930,7 +1301,11 @@ func handleIncomingMessage(jid string, senderName string, message string) {
 				if msgID > 0 {
 					// Atualiza a resposta da mensagem já salva
 					if err := database.AtualizarResposta(msgID, resposta); err != nil {
-						fmt.Printf("Erro ao atualizar resposta no histórico: %v\n", err)
+						fmt.Printf("[ERRO] Falha ao atualizar resposta no histórico: %v\n", err)
+					} else {
+						fmt.Println("[INFO] Resposta atualizada no histórico com sucesso")
+						// Atualiza a interface novamente para mostrar a resposta
+						atualizarInterfaceHistorico(jid)
 					}
 				} else {
 					// Salva como nova mensagem de saída
@@ -943,11 +1318,27 @@ func handleIncomingMessage(jid string, senderName string, message string) {
 						Entrada:   false, // mensagem enviada
 					}
 					
-					if _, err := database.SalvarMensagem(msg); err != nil {
-						fmt.Printf("Erro ao salvar resposta no histórico: %v\n", err)
+					respID, err := database.SalvarMensagem(msg)
+					if err != nil {
+						fmt.Printf("[ERRO] Falha ao salvar resposta no histórico: %v\n", err)
+					} else {
+						fmt.Printf("[INFO] Resposta salva no histórico com ID: %d\n", respID)
+						// Atualiza a interface para mostrar a nova mensagem
+						atualizarInterfaceHistorico(jid)
 					}
 				}
 			}
+		} else {
+			fmt.Println("[ALERTA] Cliente WhatsApp não está conectado, resposta gerada mas não enviada")
+			// Notifica na interface
+			updateStatusBar("WhatsApp desconectado, resposta não enviada")
+			
+			// Mostra a resposta gerada em um diálogo para que o usuário possa copiar
+			go func() {
+				if mainWindow != nil {
+					showInfoDialog(fmt.Sprintf("Resposta gerada (WhatsApp desconectado):"), resposta)
+				}
+			}()
 		}
 	}()
 }
