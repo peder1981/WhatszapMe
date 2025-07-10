@@ -9,6 +9,8 @@ WhatszapMe é um atendente virtual para WhatsApp de uso pessoal que utiliza mode
 ## Novidades (Julho 2025)
 
 - **Interface de Histórico Aprimorada**: Visualização otimizada de contatos e mensagens
+- **Ordenação Dinâmica de Contatos**: Contatos são automaticamente ordenados por atividade recente
+- **Atualização Automática da Interface**: O histórico é atualizado em tempo real após interações
 - **Intervenção Manual**: Agora é possível enviar mensagens diretamente pelo histórico
 - **Estabilidade**: Correção de bugs e melhorias de desempenho
 - **Detecção Automática**: Identificação e exibição automática de contatos
@@ -43,9 +45,11 @@ WhatszapMe é um atendente virtual para WhatsApp de uso pessoal que utiliza mode
 - **Gerenciamento de Contatos**: Selecione quais contatos o assistente responderá automaticamente
 - **Histórico de Conversas Completo**: 
   - Visualização organizada de contatos e mensagens
+  - Ordenação dinâmica de contatos por atividade recente (estilo WhatsApp)
   - Intervenção manual diretamente pelo histórico
   - Distinção visual entre mensagens recebidas e enviadas
   - Armazenamento eficiente em SQLite
+  - Atualização automática da interface após envio/recebimento de mensagens
 - **Autenticação via QR Code**: Simples escaneamento do QR Code exibido na interface
 - **Atualização em Tempo Real**: Interface atualiza automaticamente ao receber novas mensagens
 - **Multiplataforma**: Disponível para Windows, macOS e Linux com instalação simplificada
@@ -163,16 +167,18 @@ O WhatszapMe permite escolher quais contatos receberão respostas automáticas:
 
 Na aba "Histórico", você pode:
 
-1. Visualizar todos os contatos armazenados no banco de dados
+1. Visualizar todos os contatos armazenados no banco de dados (ordenados por atividade recente)
 2. Selecionar um contato para ver seu histórico completo de mensagens
 3. Ver histórico detalhado com mensagens recebidas e respostas enviadas
 4. **Intervenção Manual**: Enviar mensagens diretamente pelo histórico
    - Digite sua mensagem no campo de texto na parte inferior
    - Clique em "Enviar" ou pressione Enter para enviar a mensagem
    - As mensagens enviadas manualmente são identificadas visualmente
+   - O contato é movido para o topo da lista após nova interação (ordenação dinâmica)
 5. Todas as mensagens são armazenadas no banco de dados para referência futura
 6. O histórico recente é usado como contexto para as novas respostas do LLM
 7. Interface visual aprimorada com ícones diferentes para cada tipo de mensagem
+8. Atualização instantânea da interface após envio ou recebimento de mensagens
 
 ## Desenvolvimento
 

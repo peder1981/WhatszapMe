@@ -1,8 +1,18 @@
 # WhatszapMe - Notas de Lançamento
 
+## Versão 1.0.1 (Julho 2025)
+
+### Melhorias e Correções
+
+- **Ordenação Dinâmica de Contatos**: Implementada a ordenação automática dos contatos por atividade recente (semelhante ao WhatsApp Web)
+- **Atualização Automática da Interface**: O histórico de mensagens e a lista de contatos agora são atualizados instantaneamente após o envio/recebimento de mensagens
+- **Correção de Thread-Safety**: Corrigido problema com atualização da interface em operações assíncronas
+- **Otimização do Banco de Dados**: Consultas SQL aprimoradas para melhor performance na ordenação dos contatos
+- **Melhoria de UX**: O contato agora é automaticamente movido para o topo da lista após interação, proporcionando uma experiência mais consistente
+
 ## Versão 1.0.0 (Julho 2025)
 
-### Funcionalidades Implementadas
+### Funcionalidades Iniciais
 
 - **Interface Gráfica Completa**: Interface amigável utilizando Fyne para configuração e gerenciamento do assistente
 - **Integração WhatsApp**: Autenticação via QR Code e gerenciamento de mensagens usando whatsmeow
@@ -57,3 +67,20 @@ GOOS=darwin GOARCH=amd64 CGO_ENABLED=0 go build -o WhatszapMe-macOS
 ### Problemas Conhecidos
 - Em algumas distribuições Linux, pode ser necessário instalar dependências adicionais para o Fyne
 - Na compilação para macOS via cross-compile, recursos específicos da plataforma podem não funcionar corretamente
+
+### Detalhes Técnicos da Atualização 1.0.1
+
+#### Ordenação Dinâmica de Contatos
+- Modificada a consulta SQL em `BuscarContatos` para ordenar contatos pelo timestamp da mensagem mais recente
+- Implementada CTE (Common Table Expression) para identificação eficiente das últimas mensagens de cada contato
+- Adicionado suporte para diferentes versões do SQLite com tratamento NULLS LAST
+
+#### Atualização Automática da Interface
+- Corrigido fluxo de atualização na função `enviarMensagemManual` para garantir que a interface seja atualizada após o envio de mensagens
+- Implementada atualização thread-safe dos componentes usando os métodos corretos do Fyne
+- Adicionadas chamadas para recarregar contatos após envio/recebimento para garantir reordenação dinâmica
+
+#### Correções e Melhorias
+- Corrigidos problemas de sintaxe e estruturais na função de envio de mensagens
+- Adicionadas verificações de nil para evitar crashes ao atualizar componentes da interface
+- Melhorada a experiência do usuário com feedback visual durante o envio de mensagens
