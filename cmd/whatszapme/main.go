@@ -43,7 +43,12 @@ func main() {
 	}
 
 	// Inicializa cliente WhatsApp
-	whatsappClient, err := whatsapp.NewClient(filepath.Join(configDir, "store.db"))
+	config := &whatsapp.ClientConfig{
+		DBPath: filepath.Join(configDir, "store.db"),
+		LogLevel: "INFO",
+		AutoReconnect: true,
+	}
+	whatsappClient, err := whatsapp.NewClient(config)
 	if err != nil {
 		log.Fatalf("Erro ao criar cliente WhatsApp: %v", err)
 	}
@@ -59,18 +64,19 @@ func main() {
 	}
 
 	// Define o handler de mensagens
-	whatsappClient.SetupMessageHandler(func(sender, message string) (string, error) {
+	whatsappClient.SetMessageHandler(func(jid, sender, message string) {
 		log.Printf("Mensagem recebida de %s: %s", sender, message)
 		
 		// Gera resposta utilizando o LLM
 		response, err := llmProvider.GenerateCompletion(message, systemPrompt)
 		if err != nil {
 			log.Printf("Erro ao gerar resposta: %v", err)
-			return "Desculpe, ocorreu um erro ao processar sua mensagem.", err
+			whatsappClient.SendMessage(jid, "Desculpe, ocorreu um erro ao processar sua mensagem.")
+			return
 		}
 
 		log.Printf("Resposta gerada: %s", response)
-		return response, nil
+		whatsappClient.SendMessage(jid, response)
 	})
 
 	// Conecta ao WhatsApp

@@ -112,14 +112,14 @@ func main() {
 	} else {
 		// Gera URL de autenticação e orienta o usuário
 		authURL := oauth.GetAuthURL()
-		fmt.Println("\n=====================================================")
+		fmt.Println("=====================================================")
 		fmt.Println("Siga estas instruções para autenticar com sua conta Google:")
 		fmt.Println("1. Abra a seguinte URL no seu navegador:")
 		fmt.Printf("\n%s\n\n", authURL)
 		fmt.Println("2. Faça login com sua conta Google")
 		fmt.Println("3. Permita o acesso solicitado")
 		fmt.Println("4. Você será redirecionado para uma página de confirmação")
-		fmt.Println("=====================================================\n")
+		fmt.Println("=====================================================")
 	}
 
 	// Espera pela conclusão da autenticação ou interrupção
@@ -152,7 +152,7 @@ func testLLM(oauth *auth.GoogleOAuth, modelName string, prompt string, systemPro
 	fmt.Println("Testando cliente LLM com autenticação OAuth2")
 	fmt.Printf("Modelo: %s\n", modelName)
 	fmt.Printf("Prompt: %s\n", prompt)
-	fmt.Println("=====================================================\n")
+	fmt.Println("=====================================================")
 
 	ctx := context.Background()
 	
@@ -175,7 +175,7 @@ func testLLM(oauth *auth.GoogleOAuth, modelName string, prompt string, systemPro
 	
 	fmt.Printf("\nResposta recebida em %v:\n\n", elapsed)
 	fmt.Println(response)
-	fmt.Println("\n=====================================================")
+	fmt.Println("=====================================================")
 	fmt.Println("Teste concluído com sucesso!")
 	fmt.Println("=====================================================")
 }

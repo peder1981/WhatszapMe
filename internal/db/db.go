@@ -227,28 +227,63 @@ func (db *DB) BuscarMensagens(opcoes OpcoesConsulta) ([]Mensagem, error) {
 	return mensagens, nil
 }
 
-// BuscarContatos retorna uma lista de contatos do banco de dados
+// BuscarContatos retorna uma lista de contatos do banco de dados ordenados por atividade mais recente
 func (db *DB) BuscarContatos() ([]struct{ JID, Nome string }, error) {
-	// Nova implementação: busca da tabela de contatos primeiro, depois complementa com mensagens
+	// Nova implementação: busca contatos ordenados pela última mensagem (mais recente primeiro)
+	// Isso simula o comportamento do WhatsApp Web, onde contatos mais ativos aparecem no topo
 	query := `
-		SELECT jid, nome FROM contatos
+		WITH UltimasMensagens AS (
+			SELECT jid, MAX(timestamp) as ultima_atividade
+			FROM mensagens
+			GROUP BY jid
+		)
+		SELECT c.jid, c.nome, um.ultima_atividade
+		FROM contatos c
+		LEFT JOIN UltimasMensagens um ON c.jid = um.jid
 		UNION
-		SELECT DISTINCT jid, nome 
-		FROM mensagens 
-		WHERE jid NOT IN (SELECT jid FROM contatos)
-		ORDER BY nome
+		SELECT m.jid, m.nome, um.ultima_atividade
+		FROM mensagens m
+		JOIN UltimasMensagens um ON m.jid = um.jid
+		WHERE m.jid NOT IN (SELECT jid FROM contatos)
+		GROUP BY m.jid
+		ORDER BY ultima_atividade DESC NULLS LAST
 	`
 
+	// Tenta executar a query com NULLS LAST (SQLite >= 3.30.0)
 	rows, err := db.conn.Query(query)
+	
+	// Se der erro (versões mais antigas do SQLite não suportam NULLS LAST), use uma query alternativa
 	if err != nil {
-		return nil, fmt.Errorf("erro ao buscar contatos: %w", err)
+		query = `
+			WITH UltimasMensagens AS (
+				SELECT jid, MAX(timestamp) as ultima_atividade
+				FROM mensagens
+				GROUP BY jid
+			)
+			SELECT c.jid, c.nome, um.ultima_atividade
+			FROM contatos c
+			LEFT JOIN UltimasMensagens um ON c.jid = um.jid
+			UNION
+			SELECT m.jid, m.nome, um.ultima_atividade
+			FROM mensagens m
+			JOIN UltimasMensagens um ON m.jid = um.jid
+			WHERE m.jid NOT IN (SELECT jid FROM contatos)
+			GROUP BY m.jid
+			ORDER BY CASE WHEN ultima_atividade IS NULL THEN 0 ELSE 1 END DESC, ultima_atividade DESC
+		`
+		
+		rows, err = db.conn.Query(query)
+		if err != nil {
+			return nil, fmt.Errorf("erro ao buscar contatos: %w", err)
+		}
 	}
 	defer rows.Close()
 
 	var contatos []struct{ JID, Nome string }
 	for rows.Next() {
 		var contato struct{ JID, Nome string }
-		if err := rows.Scan(&contato.JID, &contato.Nome); err != nil {
+		var ultimaAtividade interface{} // Usamos interface{} para aceitar qualquer tipo retornado pelo SQLite
+		if err := rows.Scan(&contato.JID, &contato.Nome, &ultimaAtividade); err != nil {
 			return nil, fmt.Errorf("erro ao ler contato: %w", err)
 		}
 		contatos = append(contatos, contato)

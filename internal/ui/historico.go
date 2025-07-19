@@ -2,9 +2,11 @@ package ui
 
 import (
 	"fmt"
+	"image/color"
 	"time"
 
 	"fyne.io/fyne/v2"
+	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/dialog"
 	"fyne.io/fyne/v2/layout"
@@ -261,73 +263,119 @@ func (gh *GerenciadorHistorico) ConfigurarEnvioCallback(fn EnviarMensagemCallbac
 
 // enviarMensagemManual processa o envio manual de uma mensagem para o contato atual
 func (gh *GerenciadorHistorico) enviarMensagemManual() {
-	// Verifica se há um contato selecionado
+	// Verifica se tem contato selecionado
 	if gh.contatoAtual == "" {
-		dialog.ShowInformation("Aviso", "Selecione um contato antes de enviar uma mensagem.", gh.window)
+		dialog.ShowInformation("Nenhum contato selecionado", "Por favor, selecione um contato para enviar a mensagem.", gh.window)
 		return
 	}
 	
-	// Verifica se o texto não está vazio
+	// Verifica se tem texto para enviar
 	texto := gh.campoMensagem.Text
 	if texto == "" {
-		dialog.ShowInformation("Aviso", "Digite uma mensagem antes de enviar.", gh.window)
+		dialog.ShowInformation("Mensagem vazia", "Por favor, digite uma mensagem para enviar.", gh.window)
 		return
 	}
 	
-	// Verifica se o callback está configurado
+	// Verifica se tem função de callback configurada
 	if gh.enviarMensagemFn == nil {
 		dialog.ShowError(fmt.Errorf("função de envio não configurada"), gh.window)
 		return
 	}
 	
-	// Busca nome do contato
-	nome := "Contato"
-	for _, c := range gh.contatos {
-		if c.JID == gh.contatoAtual {
-			nome = c.Nome
-			break
-		}
-	}
+	// Armazena dados localmente para evitar race conditions
+	destinatario := gh.contatoAtual
+	mensagemTexto := gh.campoMensagem.Text
 	
-	// Envia a mensagem
-	err := gh.enviarMensagemFn(gh.contatoAtual, texto)
-	if err != nil {
-		dialog.ShowError(fmt.Errorf("erro ao enviar mensagem: %v", err), gh.window)
-		return
-	}
-	
-	// Limpa o campo de texto
+	// Limpa o campo de mensagem antes de iniciar o processo de envio
 	gh.campoMensagem.SetText("")
 	
-	// Cria uma nova mensagem para o histórico (saindo)
-	msg := db.Mensagem{
-		JID:       gh.contatoAtual,
-		Nome:      nome,
-		Conteudo:  texto,
-		Resposta:  "",
-		Timestamp: time.Now(),
-		Entrada:   false, // não é uma mensagem de entrada
-	}
+	// Mostra confirmação visual de que está processando o envio
+	gh.botaoEnviar.Disable()
+	gh.botaoEnviar.SetText("Enviando...")
+	gh.campoMensagem.Disable()
 	
-	// Salva no banco de dados
-	_, err = gh.database.SalvarMensagem(msg)
-	if err != nil {
-		fmt.Printf("Erro ao salvar mensagem enviada: %v\n", err)
-	}
-	
-	// Atualiza a interface
-	gh.carregarMensagens(gh.contatoAtual)
+	// Envia em goroutine para não bloquear a UI
+	go func() {
+		// Tenta enviar a mensagem usando a função de callback
+		err := gh.enviarMensagemFn(destinatario, mensagemTexto)
+		
+		// Volta para a thread principal usando fyne.CurrentApp()
+		// Isso é thread-safe e pode ser chamado de qualquer goroutine
+		// Equivalente a dispatch_async no iOS ou runOnUiThread no Android
+		canvas := fyne.CurrentApp().Driver().CanvasForObject(gh.botaoEnviar)
+		if canvas != nil {
+			canvas.Content().Refresh()
+		}
+		
+		// Reativa os controles da interface
+		gh.botaoEnviar.Enable()
+		gh.botaoEnviar.SetText("Enviar")
+		gh.campoMensagem.Enable()
+		
+		// Se houve erro no envio, mostra e sai
+		if err != nil {
+			// O dialog é thread-safe no Fyne
+			dialog.ShowError(fmt.Errorf("erro ao enviar mensagem: %v", err), gh.window)
+			return
+		}
+		
+		// Feedback de sucesso
+		fmt.Println("Mensagem enviada com sucesso para:", destinatario)
+		
+		// Encontra o nome do contato
+		nomeContato := destinatario
+		for _, c := range gh.contatos {
+			if c.JID == destinatario {
+				nomeContato = c.Nome
+				break
+			}
+		}
+		
+		// Cria mensagem para o histórico local
+		msg := db.Mensagem{
+			JID:       destinatario,
+			Nome:      nomeContato,
+			Conteudo:  mensagemTexto,
+			Timestamp: time.Now(),
+			Entrada:   false, // não é uma mensagem de entrada
+		}
+		
+		// Salva no banco de dados
+		_, dbErr := gh.database.SalvarMensagem(msg)
+		if dbErr != nil {
+			fmt.Printf("Erro ao salvar mensagem enviada: %v\n", dbErr)
+		}
+		
+		// Recarrega os contatos para atualizar a ordem na lista
+		// isso garante que o contato atual vá para o topo da lista por ser o mais recente
+		gh.carregarContatos()
+		
+		// Depois atualiza o histórico de mensagens do contato atual
+		gh.carregarMensagens(gh.contatoAtual)
+		
+		// Força atualização dos widgets relevantes
+		if gh.contatosLista != nil {
+			gh.contatosLista.Refresh()
+		}
+		if gh.mensagensArea != nil {
+			gh.mensagensArea.Refresh()
+		}
+		if gh.mensagensBox != nil {
+			gh.mensagensBox.Refresh()
+		}
+	}()
 }
 
 // Carrega as mensagens de um contato específico
 func (gh *GerenciadorHistorico) carregarMensagens(jid string) {
 	// Log para debugar
-	fmt.Printf("Carregando mensagens para o contato: %s\n", jid)
+	fmt.Printf("[DEBUG] Carregando mensagens para o contato: %s\n", jid)
 	
 	// Define o contato atual
 	gh.contatoAtual = jid
 	
 	// Busca as últimas 100 mensagens (ajuste conforme necessário)
+	// Importante: não filtramos apenas por entrada=true, para mostrar ambas mensagens enviadas e recebidas
 	mensagens, err := gh.database.BuscarMensagens(db.OpcoesConsulta{
 		JID:    jid,
 		Limite: 100,
@@ -341,7 +389,7 @@ func (gh *GerenciadorHistorico) carregarMensagens(jid string) {
 	}
 
 	// Log para informar quantas mensagens foram encontradas
-	fmt.Printf("Mensagens encontradas para %s: %d\n", jid, len(mensagens))
+	fmt.Printf("[DEBUG] Mensagens encontradas para %s: %d\n", jid, len(mensagens))
 
 	// Guarda as mensagens e limpa o box
 	gh.mensagens = mensagens
@@ -349,7 +397,7 @@ func (gh *GerenciadorHistorico) carregarMensagens(jid string) {
 	
 	// Se não há mensagens, mostra uma informação
 	if len(mensagens) == 0 {
-		fmt.Println("Nenhuma mensagem encontrada para este contato.")
+		fmt.Println("[DEBUG] Nenhuma mensagem encontrada para este contato.")
 		
 		// Adiciona um texto informativo
 		infoLabel := widget.NewLabel("Nenhuma mensagem encontrada para este contato.")
@@ -358,58 +406,66 @@ func (gh *GerenciadorHistorico) carregarMensagens(jid string) {
 		return
 	}
 	
+	// Mostra quantas mensagens foram encontradas
+	fmt.Printf("[DEBUG] Exibindo %d mensagens para o contato %s\n", len(mensagens), jid)
+	
 	// Adiciona cada mensagem ao container
 	for i, msg := range mensagens {
 		// Log para depuração
-		fmt.Printf("Exibindo mensagem %d: De=%s, Entrada=%v, Conteúdo=%s, Resposta=%s\n", 
-			i, msg.Nome, msg.Entrada, msg.Conteudo, msg.Resposta)
+		fmt.Printf("[DEBUG] Exibindo mensagem %d: De=%s, Entrada=%v, Conteúdo=%s\n", 
+			i, msg.Nome, msg.Entrada, truncarTexto(msg.Conteudo, 50))
 		
-		// Configura o estilo da mensagem baseado no tipo
-		remetente := "Assistente"
-		tituloResposta := "Mensagem Original"
+		// Configura o estilo da mensagem baseado no tipo (entrada ou saída)
+		var remetente string
+		var alinhamento fyne.TextAlign
+		var cor color.Color
 		
+		// Mensagem recebida (entrada=true) vs Mensagem enviada (entrada=false)
 		if msg.Entrada {
+			// Mensagem recebida de outra pessoa
 			remetente = msg.Nome
-			tituloResposta = "Resposta do Assistente"
+			alinhamento = fyne.TextAlignLeading
+			cor = color.NRGBA{R: 50, G: 50, B: 200, A: 255} // Azul escuro
+		} else {
+			// Mensagem enviada por nós
+			remetente = "Você"
+			alinhamento = fyne.TextAlignTrailing
+			cor = color.NRGBA{R: 0, G: 150, B: 50, A: 255} // Verde escuro
 		}
 		
 		// Determina o ícone a ser usado
-		remetenteIcon := theme.ComputerIcon()
+		var remetenteIcon fyne.Resource
 		if msg.Entrada {
-			remetenteIcon = theme.AccountIcon()
+			remetenteIcon = theme.AccountIcon() // ícone para mensagens recebidas
+		} else {
+			remetenteIcon = theme.ComputerIcon() // ícone para mensagens enviadas
 		}
 		
-		// Cria o card da mensagem com um visual mais atrativo
+		// Cria o cabeçalho da mensagem com um visual mais atrativo
+		tempoFormatado := msg.Timestamp.Format("02/01/2006 15:04:05")
 		cabecalho := container.NewHBox(
 			widget.NewIcon(remetenteIcon),
 			widget.NewLabel(remetente),
 			layout.NewSpacer(),
-			widget.NewLabel(msg.Timestamp.Format("02/01/2006 15:04:05")),
+			widget.NewLabel(tempoFormatado),
 		)
 		
-		conteudoLabel := widget.NewLabel(msg.Conteudo)
-		conteudoLabel.Wrapping = fyne.TextWrapWord
+		// Cria o label para o conteúdo da mensagem com cor personalizada
+		conteudoLabel := canvas.NewText(msg.Conteudo, cor)
+		conteudoLabel.Alignment = alinhamento
+		conteudoLabel.TextSize = 14
+		conteudoLabel.TextStyle = fyne.TextStyle{Monospace: false}
 		
-		// Card para resposta (se houver)
-		respostaCard := widget.NewCard(tituloResposta, "", widget.NewLabel(msg.Resposta))
-		respostaLabel := respostaCard.Content.(*widget.Label)
-		respostaLabel.Wrapping = fyne.TextWrapWord
-		
-		// Esconde o card de resposta se estiver vazia
-		if msg.Resposta == "" {
-			respostaCard.Hide()
-		}
+		// Container para o conteúdo da mensagem com quebra de linha
+		conteudoContainer := container.NewPadded(
+			container.New(&textoLayout{}, conteudoLabel),
+		)
 		
 		// Container para a mensagem com estilo visual diferenciado
 		mensagemBox := container.NewVBox(
 			cabecalho,
-			container.NewPadded(conteudoLabel),
+			conteudoContainer,
 		)
-		
-		// Adiciona a resposta se existir
-		if msg.Resposta != "" {
-			mensagemBox.Add(container.NewPadded(respostaCard))
-		}
 		
 		// Adiciona separador
 		mensagemBox.Add(widget.NewSeparator())
@@ -422,7 +478,7 @@ func (gh *GerenciadorHistorico) carregarMensagens(jid string) {
 	if len(mensagens) > 0 {
 		go func() {
 			time.Sleep(100 * time.Millisecond)
-			fmt.Println("Rolando para a última mensagem...")
+			fmt.Println("[DEBUG] Rolando para a última mensagem...")
 			gh.mensagensArea.ScrollToBottom()
 		}()
 	}

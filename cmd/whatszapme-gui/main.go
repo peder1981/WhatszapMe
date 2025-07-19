@@ -695,9 +695,14 @@ func connectToWhatsApp(statusLabel *canvas.Text, qrCodeGenerator *ui.QRCodeGener
 		os.MkdirAll(dbDir, 0755)
 	}
 	
-	// Inicializa o cliente WhatsApp
+	// Inicializa cliente WhatsApp
+	whatsappConfig := &whatsapp.ClientConfig{
+		DBPath: config.dbPath,
+		LogLevel: "INFO",
+		AutoReconnect: true,
+	}
 	var err error
-	client, err = whatsapp.NewClient(config.dbPath)
+	client, err = whatsapp.NewClient(whatsappConfig)
 	if err != nil {
 		updateStatus(statusLabel, fmt.Sprintf("Erro ao inicializar: %v", err), color.NRGBA{R: 255, G: 0, B: 0, A: 255})
 		showErrorDialog(fmt.Sprintf("Erro ao inicializar cliente WhatsApp: %v", err))
@@ -1072,7 +1077,12 @@ func autoReconnectWhatsApp() {
 	
 	// Cria o cliente WhatsApp
 	var err error
-	client, err = whatsapp.NewClient(config.dbPath)
+	whatsappConfig := &whatsapp.ClientConfig{
+		DBPath: config.dbPath,
+		LogLevel: "INFO",
+		AutoReconnect: true,
+	}
+	client, err = whatsapp.NewClient(whatsappConfig)
 	if err != nil {
 		fmt.Printf("Erro ao criar cliente WhatsApp para reconexão automática: %v\n", err)
 		return

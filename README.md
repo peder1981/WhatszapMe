@@ -1,227 +1,151 @@
 # WhatszapMe
 
-<div align="center">
-  <img src="assets/icon.png" alt="WhatszapMe Logo" width="120" />
-</div>
+WhatszapMe é um assistente virtual para WhatsApp de uso pessoal, que integra seu número de WhatsApp com modelos de linguagem (LLMs) para criar uma experiência de chat automatizada e personalizada.
 
-WhatszapMe é um atendente virtual para WhatsApp de uso pessoal que utiliza modelos de IA locais (preferencialmente via Ollama) para seu funcionamento. A aplicação é desenvolvida para ser executada localmente em um computador pessoal, sem dependência de serviços em nuvem.
+## Características
 
-## Novidades (Julho 2025)
+- **Multiplataforma**: Funciona em Windows, macOS e Linux
+- **Interface Gráfica**: Interface amigável construída com [Fyne](https://fyne.io/)
+- **Integração com WhatsApp**: Conexão robusta usando [whatsmeow](https://github.com/tulir/whatsmeow)
+- **Suporte a Múltiplos LLMs**:
+  - Ollama (modelos locais como Llama2, Gemma, etc.)
+  - OpenAI (GPT-3.5, GPT-4)
+  - Google Gemini
+- **Persistência de Dados**: Armazenamento local em SQLite
+- **Autenticação via QR Code**: Fácil conexão com sua conta WhatsApp
 
-- **Interface de Histórico Aprimorada**: Visualização otimizada de contatos e mensagens
-- **Ordenação Dinâmica de Contatos**: Contatos são automaticamente ordenados por atividade recente
-- **Atualização Automática da Interface**: O histórico é atualizado em tempo real após interações
-- **Intervenção Manual**: Agora é possível enviar mensagens diretamente pelo histórico
-- **Estabilidade**: Correção de bugs e melhorias de desempenho
-- **Detecção Automática**: Identificação e exibição automática de contatos
-- **Visual Melhorado**: Ícones diferenciados para cada tipo de mensagem
+## Novidades
 
-## Índice
+### Cliente WhatsApp Refatorado
 
-- [Funcionalidades](#funcionalidades)
-- [Requisitos](#requisitos)
-- [Instalação](#instalação)
-  - [Windows](#windows)
-  - [macOS](#macos)
-  - [Linux](#linux)
-- [Uso](#uso)
-  - [Conexão com o WhatsApp](#conexão-com-o-whatsapp)
-  - [Configuração de Modelos LLM](#configuração-de-modelos-llm)
-  - [Uso Avançado](#uso-avançado)
-- [Desenvolvimento](#desenvolvimento)
-  - [Compilando o Código Fonte](#compilando-o-código-fonte)
-  - [Criando Instaladores](#criando-instaladores)
-- [Licença](#licença)
+O cliente WhatsApp foi completamente refatorado para resolver problemas críticos:
 
-## Funcionalidades
+- **Gerenciamento de Conexão**: Corrigido o erro "websocket is already connected"
+- **Reconexão Automática**: Implementado mecanismo com backoff exponencial
+- **QR Code Multiplataforma**: Melhor exibição em Windows, macOS e Linux
+- **Redução de Acoplamento**: Implementada injeção de dependência
+- **Tratamento de Erros**: Abordagem consistente e informativa
+- **Persistência de Sessão**: Armazenamento adequado das credenciais
 
-- **Interface Gráfica Amigável**: Interface intuitiva para configuração e gerenciamento
-- **Integração WhatsApp**: Utiliza a biblioteca whatsmeow para autenticação e gerenciamento de mensagens
-- **Modelos LLM Flexíveis**:
-  - **Ollama Local**: Utilize modelos locais como llama2, gemma3, mistral e outros
-  - **OpenAI**: Integração com GPT-3.5 e GPT-4 via API
-  - **Google Gemini**: Integração com modelos Gemini via OAuth ou API Key
-- **Personalização de Prompts**: Templates customizáveis para configurar o comportamento do assistente
-- **Gerenciamento de Contatos**: Selecione quais contatos o assistente responderá automaticamente
-- **Histórico de Conversas Completo**: 
-  - Visualização organizada de contatos e mensagens
-  - Ordenação dinâmica de contatos por atividade recente (estilo WhatsApp)
-  - Intervenção manual diretamente pelo histórico
-  - Distinção visual entre mensagens recebidas e enviadas
-  - Armazenamento eficiente em SQLite
-  - Atualização automática da interface após envio/recebimento de mensagens
-- **Autenticação via QR Code**: Simples escaneamento do QR Code exibido na interface
-- **Atualização em Tempo Real**: Interface atualiza automaticamente ao receber novas mensagens
-- **Multiplataforma**: Disponível para Windows, macOS e Linux com instalação simplificada
-
-## Requisitos
-
-### Para Uso
-
-- **Para uso com Ollama (recomendado)**: 
-  - Ollama instalado localmente ([download](https://ollama.ai/download))
-  - Modelos baixados via Ollama (ex: `ollama pull llama2`)
-
-### Para Desenvolvimento
-
-- Go 1.18+
-- Biblioteca Fyne para GUI
+Para mais detalhes, consulte a [documentação do cliente WhatsApp](docs/whatsapp_client.md).
 
 ## Instalação
 
-### Windows
+### Pré-requisitos
 
-1. Baixe o instalador `.msi` da página de [Releases](https://github.com/peder/whatszapme/releases)
-2. Execute o instalador e siga as instruções na tela
-3. O WhatszapMe será instalado e um ícone será criado na área de trabalho
+- Go 1.21 ou superior
+- SQLite
+- Para modelos locais: [Ollama](https://ollama.ai/)
 
-### macOS
+### Download
 
-1. Baixe o arquivo `.dmg` da página de [Releases](https://github.com/peder/whatszapme/releases)
-2. Abra o arquivo DMG e arraste o WhatszapMe para a pasta Aplicativos
-3. Na primeira execução, clique com o botão direito e selecione "Abrir" para contornar a verificação do Gatekeeper
+Baixe a versão mais recente para seu sistema operacional:
 
-### Linux
+- [Windows](https://github.com/peder/whatszapme/releases/latest/download/whatszapme_windows_amd64.zip)
+- [macOS](https://github.com/peder/whatszapme/releases/latest/download/whatszapme_macos_universal.dmg)
+- [Linux](https://github.com/peder/whatszapme/releases/latest/download/whatszapme_linux_amd64.tar.gz)
 
-#### Debian/Ubuntu
-
-```bash
-# Baixe o pacote .deb da página de Releases
-sudo dpkg -i whatszapme_1.0.0_amd64.deb
-# Caso haja dependências faltantes
-sudo apt-get install -f
-```
-
-#### Arch Linux
+Ou compile a partir do código fonte:
 
 ```bash
-# Usando o pacote AUR
-yay -S whatszapme
-```
-
-#### Usando o binário executável
-
-```bash
-# Baixe o arquivo tarball da página de Releases
-tar -xzf whatszapme_1.0.0_linux_amd64.tar.gz
-cd whatszapme_1.0.0_linux_amd64
-./whatszapme-gui
+git clone https://github.com/peder/whatszapme.git
+cd whatszapme
+go build -o whatszapme ./cmd/whatszapme-gui
 ```
 
 ## Uso
 
-### Conexão com o WhatsApp
+### Inicialização
 
-1. Abra o WhatszapMe
-2. Na aba "Conexão", clique no botão "Iniciar Conexão"
-3. Um QR Code será exibido na tela
-4. Abra o WhatsApp em seu celular
-5. Acesse Configurações > Dispositivos Conectados > Vincular Dispositivo
-6. Escaneie o QR Code exibido no WhatszapMe
-7. Após a conexão bem-sucedida, o status mudará para "Conectado e autenticado"
+Utilize os scripts de inicialização fornecidos para cada plataforma:
 
-### Configuração de Modelos LLM
+**Linux:**
+```bash
+./start_linux.sh
+```
 
-1. Na aba "Configurações", selecione o provedor LLM desejado:
+**Windows:**
+```
+start_windows.bat
+```
+
+**macOS:**
+```bash
+./start_mac.sh
+```
+
+Alternativamente, você pode executar o binário diretamente após a compilação.
+
+### Configuração
+
+1. Execute o aplicativo usando o script apropriado para seu sistema
+2. Configure o provedor LLM desejado (Ollama, OpenAI ou Google)
+3. Escaneie o QR Code com seu WhatsApp
+4. Comece a receber e responder mensagens automaticamente!
+
+### Configuração de LLMs
 
 #### Ollama (Local)
 
-- **URL**: Padrão `http://localhost:11434`
-- **Modelo**: Selecione entre llama2, gemma3:4b, llama2:13b, mistral, etc.
-- **Pré-requisito**: Ollama instalado e modelo baixado (`ollama pull [modelo]`)
+1. Instale o [Ollama](https://ollama.ai/)
+2. Baixe um modelo (ex: `ollama pull llama2`)
+3. Configure o WhatszapMe para usar o Ollama com o modelo escolhido
 
 #### OpenAI
 
-- **Chave API**: Insira sua chave API da OpenAI
-- **Modelo**: gpt-3.5-turbo ou gpt-4
+1. Obtenha uma [API Key da OpenAI](https://platform.openai.com/)
+2. Configure o WhatszapMe com sua API Key e o modelo desejado
 
-#### Google
+#### Google Gemini
 
-- **Autenticação**: OAuth (recomendado) ou Chave API
-- **Modelo**: gemini-pro
+1. Obtenha uma [API Key do Google AI Studio](https://ai.google.dev/)
+2. Configure o WhatszapMe com sua API Key
 
-### Uso Avançado
+## Exemplos
 
-O WhatszapMe criará uma pasta `.whatszapme` em seu diretório home, contendo:
+O projeto inclui exemplos práticos:
 
-- **Banco de dados SQLite**: Armazenamento de sessões do WhatsApp e histórico de conversas
-- **Configurações**: Preferências do aplicativo e templates de prompts
-- **Logs**: Registros de atividade para depuração
+- `/examples/whatsapp_client_example.go`: Demonstra o uso do cliente WhatsApp refatorado
+- `/examples/whatsapp_llm_integration.go`: Mostra a integração entre WhatsApp e LLMs
 
-#### Personalização de Prompts
+## Estrutura do Projeto
 
-Na aba "Configurações", você pode personalizar os prompts enviados ao modelo LLM:
-
-1. Use variáveis como `{{.UserName}}`, `{{.Message}}` e `{{.History}}` nos templates
-2. Configure prompts específicos para tipos de interações diferentes
-3. As alterações são salvas automaticamente
-
-#### Gerenciamento de Contatos
-
-O WhatszapMe permite escolher quais contatos receberão respostas automáticas:
-
-1. Na aba "Configurações", escolha entre "Responder a todos os contatos" ou "Responder apenas a contatos específicos"
-2. Adicione os contatos autorizados pelo número de telefone (formato internacional)
-
-#### Histórico de Conversas
-
-Na aba "Histórico", você pode:
-
-1. Visualizar todos os contatos armazenados no banco de dados (ordenados por atividade recente)
-2. Selecionar um contato para ver seu histórico completo de mensagens
-3. Ver histórico detalhado com mensagens recebidas e respostas enviadas
-4. **Intervenção Manual**: Enviar mensagens diretamente pelo histórico
-   - Digite sua mensagem no campo de texto na parte inferior
-   - Clique em "Enviar" ou pressione Enter para enviar a mensagem
-   - As mensagens enviadas manualmente são identificadas visualmente
-   - O contato é movido para o topo da lista após nova interação (ordenação dinâmica)
-5. Todas as mensagens são armazenadas no banco de dados para referência futura
-6. O histórico recente é usado como contexto para as novas respostas do LLM
-7. Interface visual aprimorada com ícones diferentes para cada tipo de mensagem
-8. Atualização instantânea da interface após envio ou recebimento de mensagens
-
-## Desenvolvimento
-
-### Compilando o Código Fonte
-
-```bash
-# Clone o repositório
-git clone https://github.com/peder/whatszapme.git
-cd whatszapme
-
-# Baixe as dependências
-go mod tidy
-
-# Execute a aplicação GUI
-cd cmd/whatszapme-gui
-go run .
+```
+/
+├── cmd/
+│   └── whatszapme-gui/      # Ponto de entrada da aplicação GUI
+├── internal/
+│   ├── auth/                # Autenticação (OAuth)
+│   ├── config/              # Configurações da aplicação
+│   ├── db/                  # Banco de dados SQLite
+│   ├── llm/                 # Integração com LLMs
+│   ├── prompt/              # Templates de prompts
+│   ├── token/               # Gerenciamento de tokens
+│   ├── ui/                  # Interface gráfica com Fyne
+│   └── whatsapp/            # Cliente WhatsApp refatorado
+├── docs/                    # Documentação
+├── examples/                # Exemplos de uso
+└── assets/                  # Recursos (ícones, etc.)
 ```
 
-### Criando Instaladores
+## Contribuindo
 
-Precisa da ferramenta Fyne CLI e Go 1.23+:
+Contribuições são bem-vindas! Por favor, siga estas etapas:
 
-```bash
-go install fyne.io/tools/cmd/fyne@latest
-
-# Linux
-cd cmd/whatszapme-gui
-fyne package -os linux -icon ../../assets/icon.png -name WhatszapMe --app-id com.peder.whatszapme
-
-# Windows (requer gcc-mingw-w64)
-cd cmd/whatszapme-gui
-fyne package -os windows -icon ../../assets/icon.png -name WhatszapMe --app-id com.peder.whatszapme
-
-# macOS (compilação cruzada sem CGO)
-cd cmd/whatszapme-gui
-GOOS=darwin GOARCH=amd64 CGO_ENABLED=0 go build -o WhatszapMe-macOS
-
-# Para empacotamento completo macOS (requer ambiente macOS real)
-# fyne package -os darwin -icon ../../assets/icon.png -name WhatszapMe --app-id com.peder.whatszapme
-```
-
-Consulte o arquivo RELEASE_NOTES.md para mais detalhes sobre o processo de compilação multiplataforma.
+1. Faça um fork do repositório
+2. Crie uma branch para sua feature (`git checkout -b feature/nova-feature`)
+3. Faça commit das suas alterações (`git commit -am 'Adiciona nova feature'`)
+4. Faça push para a branch (`git push origin feature/nova-feature`)
+5. Crie um novo Pull Request
 
 ## Licença
 
-Este projeto é licenciado sob a licença MIT - consulte o arquivo LICENSE para obter detalhes.
+Este projeto está licenciado sob a licença MIT - veja o arquivo LICENSE para detalhes.
+
+## Agradecimentos
+
+- [whatsmeow](https://github.com/tulir/whatsmeow) - Cliente WhatsApp em Go
+- [Fyne](https://fyne.io/) - Framework GUI para Go
+- [Ollama](https://ollama.ai/) - Modelos de linguagem locais
+- [OpenAI](https://openai.com/) - Modelos GPT
+- [Google Gemini](https://ai.google.dev/) - Modelos Gemini
